@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- `partially_implemented` records started but unfinished work; eligible tickets appear in `frontier`, can resume with `start`, and appear in the viewer
 - `ready` now lists only refined tickets with closed dependencies; `start` requires both conditions
 - Extracted `edit`, `ls`, `query`, and `migrate-beads` commands to plugins (ticket-extras)
 - The `view` inspector now links plain web URLs in ticket Markdown and opens them in new tabs
@@ -21,6 +22,7 @@
 - CI scripts for publishing to Homebrew tap and AUR
 
 ### Plugins
+- ticket-view 1.2.0: Show and edit partially implemented status
 - ticket-view 1.1.0: Link plain URLs, edit status and assignee from a node's context menu, and show assignee avatars
 - ticket-edit 1.0.0: Open ticket in $EDITOR (extracted from core)
 - ticket-ls 1.0.0: List tickets with optional filters (extracted from core); `ticket-list` symlink for alias

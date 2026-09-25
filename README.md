@@ -68,10 +68,10 @@ Commands:
     --external-ref         External reference (e.g., gh-123, JIRA-456)
     --parent               Parent ticket ID
     --tags                 Comma-separated tags (e.g., --tags ui,backend,urgent)
-  start <id>               Start a ready ticket with closed dependencies
+  start <id>               Start a ready or partially implemented ticket with closed dependencies
   close <id>               Set status to closed
   reopen <id>              Set status to open
-  status <id> <status>     Update status (open|ready|in_progress|closed)
+  status <id> <status>     Update status (open|ready|in_progress|partially_implemented|closed)
   dep <id> <dep-id>        Add dependency (id depends on dep-id)
   dep tree [--full] <id>   Show dependency tree (--full disables dedup)
   dep cycle                Find dependency cycles in unfinished tickets
@@ -79,7 +79,7 @@ Commands:
   link <id> <id> [id...]   Link tickets together (symmetric)
   unlink <id> <target-id>  Remove link between tickets
   ls|list [--status=X] [-a X] [-T X]   List tickets
-  frontier [-a X] [-T X]   List open/ready tickets with deps resolved
+  frontier [-a X] [-T X]   List open/ready/partially implemented tickets with deps resolved
   ready [-a X] [-T X]      List ready tickets with deps resolved
   blocked [-a X] [-T X]    List unfinished tickets with unresolved deps
   closed [--limit=N] [-a X] [-T X] List recently closed tickets (default 20, by mtime)
@@ -101,12 +101,9 @@ Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
 New tickets start as `open`: the outcome and known dependencies are recorded,
 but implementation detail can still change. Refine an eligible `open` ticket
 against the current repository, then run `tk status <id> ready`. `tk frontier`
-shows eligible `open` and `ready` tickets. `tk ready` shows only tickets that
-can start now. A ticket with an unfinished dependency appears in `tk blocked`
-regardless of whether its status is `open` or `ready`. `tk start` requires
-`ready` status and closed dependencies.
+shows eligible `open`, `ready`, and `partially_implemented` tickets. Use `partially_implemented` when work started but was left unfinished; it stays on the frontier without losing that history. `tk ready` shows only tickets marked `ready`. A ticket with an unfinished dependency appears in `tk blocked` when its status is `open`, `ready`, `in_progress`, or `partially_implemented`. `tk start` accepts `ready` or `partially_implemented` with closed dependencies.
 
-`tk view` opens a local, read-only graph for the current project's `.tickets/`
+`tk view` opens a local graph for the current project's `.tickets/`
 folder. Dependencies point from left to right. When the graph is much wider
 than the window, later columns wrap into stacked bands below the first. Epics
 appear in the color legend with their visible ticket counts; their child
@@ -114,7 +111,7 @@ tickets appear as nodes grouped by epic within each column. Closed tickets are
 hidden by default. Show closed tickets, then show closed epics, to reveal older work.
 Click an epic name to filter its tickets; click it again to clear the filter.
 The epic filter is disabled when only one epic is available.
-Right-click a ticket node to set its assignee or status. The assignee list includes names already used by tickets, Agent, Unassigned, and Add new for entering a name. Assignees appear as colored initials in the header legend, on nodes, and in the inspector. The status list offers open, ready, in progress, and closed; entering in progress follows the same readiness and dependency checks as `tk status`. Press Shift+F10 on a focused node to open the menu from the keyboard.
+Right-click a ticket node to set its assignee or status. The assignee list includes names already used by tickets, Agent, Unassigned, and Add new for entering a name. Assignees appear as colored initials in the header legend, on nodes, and in the inspector. The status list offers open, ready, in progress, partially implemented, and closed; entering in progress follows the same readiness and dependency checks as `tk status`. Nodes abbreviate partially implemented as Partial, while the inspector shows its full name. Press Shift+F10 on a focused node to open the menu from the keyboard.
 
 The graph fits itself on first load. Drag to pan. Use the mouse wheel or the
 +/- buttons to zoom. Press `F` or click Fit to show all visible nodes. Select a

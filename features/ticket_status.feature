@@ -14,6 +14,27 @@ Feature: Ticket Status Management
     And the output should be "Updated test-0001 -> in_progress"
     And ticket "test-0001" should have field "status" with value "in_progress"
 
+  Scenario: Mark started work as partially implemented
+    Given ticket "test-0001" has status "in_progress"
+    When I run "ticket status test-0001 partially_implemented"
+    Then the command should succeed
+    And ticket "test-0001" should have field "status" with value "partially_implemented"
+
+  Scenario: Resume partially implemented work
+    Given ticket "test-0001" has status "partially_implemented"
+    When I run "ticket start test-0001"
+    Then the command should succeed
+    And ticket "test-0001" should have field "status" with value "in_progress"
+
+  Scenario: Partially implemented work with an unfinished dependency cannot resume
+    Given a ticket exists with ID "test-0002" and title "Prerequisite"
+    And ticket "test-0001" depends on "test-0002"
+    And ticket "test-0001" has status "partially_implemented"
+    When I run "ticket start test-0001"
+    Then the command should fail
+    And the output should contain "dependency 'test-0002' is not closed"
+    And ticket "test-0001" should have field "status" with value "partially_implemented"
+
   Scenario: Set status to closed
     When I run "ticket status test-0001 closed"
     Then the command should succeed
@@ -51,7 +72,7 @@ Feature: Ticket Status Management
     When I run "ticket status test-0001 invalid"
     Then the command should fail
     And the output should contain "Error: invalid status 'invalid'"
-    And the output should contain "open ready in_progress closed"
+    And the output should contain "open ready in_progress partially_implemented closed"
 
   Scenario: Open tickets require refinement before starting
     When I run "ticket start test-0001"

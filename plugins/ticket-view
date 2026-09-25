@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.1.0
+# tk-plugin-version: 1.2.0
 
 """Local ticket graph with status updates. Python 3 standard library only."""
 
@@ -92,6 +92,7 @@ PAGE = r"""<!doctype html>
     border: 1px solid color-mix(in srgb, var(--color) 40%, var(--line)); border-radius: 7px; background: var(--surface);
     text-align: left; box-shadow: 0 1px 2px #17212c0f; cursor: pointer; }
   .node[data-status="in_progress"] { background: #fdf0de; border-color: #e3a55a; }
+  .node[data-status="partially_implemented"] { background: #fff8f0; border-color: #c57435; }
   .node:hover { border-color: color-mix(in srgb, var(--color) 70%, var(--ink-3)); box-shadow: 0 2px 8px #17212c1a; }
   .node[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 4px 12px #17212c1f; }
   .node.related { border-color: var(--accent); }
@@ -118,6 +119,7 @@ PAGE = r"""<!doctype html>
   .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--status); flex: none; }
   .status[data-status="ready"] { --status: #1f63b8; }
   .status[data-status="in_progress"] { --status: #c26a06; color: #8a4b04; }
+  .status[data-status="partially_implemented"] { --status: #b65d17; color: #91460e; }
   .status[data-status="in_progress"]::before, .status[data-status="closed"]::before { background: var(--status); }
   .status[data-status="closed"] { --status: #a3adb8; color: var(--ink-3); }
   .empty-graph { position: absolute; top: 24px; left: 24px; margin: 0; color: var(--ink-3); white-space: nowrap; }
@@ -234,8 +236,9 @@ function chooseBandCount(counts) {
   for (let bands = 2; bands <= counts.length; bands++) if (score(bands) < score(best) - 0.01) best = bands;
   return best;
 }
-const statusLabel = status => ({ in_progress: 'In progress' })[status] || status.charAt(0).toUpperCase() + status.slice(1);
-const statuses = ['open', 'ready', 'in_progress', 'closed'];
+const statusLabel = status => ({ in_progress: 'In progress', partially_implemented: 'Partially implemented' })[status] || status.charAt(0).toUpperCase() + status.slice(1);
+const nodeStatusLabel = status => status === 'partially_implemented' ? 'Partial' : statusLabel(status);
+const statuses = ['open', 'ready', 'in_progress', 'partially_implemented', 'closed'];
 const ticketMenu = document.querySelector('#ticket-menu');
 const assignee = ticket => ticket.metadata.assignee || '';
 function avatar(name) {
@@ -308,7 +311,7 @@ function openTicketMenu(ticket, x, y) {
   ticketMenu.append(unassigned, add, document.createElement('hr'), menuHeading('Set status'));
   ticketMenu.querySelector('hr').className = 'menu-divider';
   const map = byId();
-  const canStart = ['ready', 'in_progress'].includes(ticket.status) && ticket.deps.every(id => map.get(id)?.status === 'closed');
+  const canStart = ['ready', 'in_progress', 'partially_implemented'].includes(ticket.status) && ticket.deps.every(id => map.get(id)?.status === 'closed');
   for (const status of statuses) {
     const option = document.createElement('button');
     option.type = 'button';
@@ -316,7 +319,7 @@ function openTicketMenu(ticket, x, y) {
     option.setAttribute('aria-checked', String(status === ticket.status));
     option.textContent = statusLabel(status);
     option.disabled = status === ticket.status || (status === 'in_progress' && !canStart);
-    if (status === 'in_progress' && !canStart) option.title = 'Requires ready status and closed dependencies';
+    if (status === 'in_progress' && !canStart) option.title = 'Requires ready or partially implemented status and closed dependencies';
     option.addEventListener('click', () => setStatus(ticket.id, ticket.status, status));
     ticketMenu.append(option);
   }
@@ -811,8 +814,9 @@ function updateNodes() {
     const span = (cls, text) => Object.assign(document.createElement('span'), { className: cls, textContent: text });
     const meta = span('node-meta', '');
     const dot = span('dot', '');
-    const status = span('status', statusLabel(t.status));
+    const status = span('status', nodeStatusLabel(t.status));
     status.dataset.status = t.status;
+    status.title = statusLabel(t.status);
     meta.append(dot, span('node-id', t.id), status);
     if (t.metadata.priority) meta.append(span('node-priority', 'P' + t.metadata.priority));
     const owner = span('node-assignee', '');
@@ -1248,7 +1252,7 @@ def main():
                 self.send_json(200, {"assignee": name})
                 return
             status = value
-            if status not in ("open", "ready", "in_progress", "closed"):
+            if status not in ("open", "ready", "in_progress", "partially_implemented", "closed"):
                 self.send_json(400, {"error": "Invalid status"})
                 return
             if current["status"] != expected:

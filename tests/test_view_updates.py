@@ -46,6 +46,9 @@ with TemporaryDirectory() as temp:
         assert set_status("dep", "open", "closed") == (200, {"status": "closed"})
         assert set_status("task", "ready", "in_progress") == (200, {"status": "in_progress"})
         assert "status: in_progress" in (directory / "task.md").read_text()
+        assert set_status("task", "in_progress", "partially_implemented") == (200, {"status": "partially_implemented"})
+        assert "status: partially_implemented" in (directory / "task.md").read_text()
+        assert set_status("task", "partially_implemented", "in_progress") == (200, {"status": "in_progress"})
         assert set_assignee("task", "", "Agent") == (200, {"assignee": "Agent"})
         assert "assignee: Agent" in (directory / "task.md").read_text()
         assert set_assignee("task", "", "Byron Wall")[0] == 409

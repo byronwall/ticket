@@ -117,6 +117,30 @@ Feature: Ticket Listing
     And the output should contain "front-001"
     And the output should contain "front-002"
 
+  Scenario: Frontier includes partially implemented tickets but ready does not
+    Given a ticket exists with ID "front-001" and title "Work to resume"
+    And ticket "front-001" has status "partially_implemented"
+    When I run "ticket frontier"
+    Then the command should succeed
+    And the output should contain "front-001"
+    And the output should contain "[partially_implemented]"
+
+  Scenario: Ready excludes partially implemented tickets
+    Given a ticket exists with ID "front-001" and title "Work to resume"
+    And ticket "front-001" has status "partially_implemented"
+    When I run "ticket ready"
+    Then the command should succeed
+    And the output should not contain "front-001"
+
+  Scenario: Frontier excludes partially implemented tickets with unfinished dependencies
+    Given a ticket exists with ID "front-001" and title "Paused with blocker"
+    And a ticket exists with ID "front-002" and title "Prerequisite"
+    And ticket "front-001" has status "partially_implemented"
+    And ticket "front-001" depends on "front-002"
+    When I run "ticket frontier"
+    Then the command should succeed
+    And the output should not contain "front-001"
+
   Scenario: Ready excludes open tickets
     Given a ticket exists with ID "front-001" and title "Needs refinement"
     And a ticket exists with ID "front-002" and title "Can execute"
@@ -144,6 +168,15 @@ Feature: Ticket Listing
     Then the command should succeed
     And the output should contain "block-001"
     And the output should contain "<- [block-002]"
+
+  Scenario: Blocked shows partially implemented tickets with unfinished dependencies
+    Given a ticket exists with ID "block-001" and title "Paused work"
+    And a ticket exists with ID "block-002" and title "Blocker"
+    And ticket "block-001" has status "partially_implemented"
+    And ticket "block-001" depends on "block-002"
+    When I run "ticket blocked"
+    Then the command should succeed
+    And the output should contain "block-001"
 
   Scenario: Blocked excludes tickets with all deps closed
     Given a ticket exists with ID "block-001" and title "Unblocked ticket"
