@@ -81,6 +81,19 @@ Feature: Ticket Listing
     Then the command should succeed
     And the output should contain "ready-001"
 
+  Scenario: Done dependencies count as closed for ready and blocked
+    Given a ticket exists with ID "ready-001" and title "Main ticket"
+    And a ticket exists with ID "ready-002" and title "Done dependency"
+    And ticket "ready-001" has status "ready"
+    And ticket "ready-001" depends on "ready-002"
+    And ticket "ready-002" has status "done"
+    When I run "ticket ready"
+    Then the command should succeed
+    And the output should contain "ready-001"
+    When I run "ticket blocked"
+    Then the command should succeed
+    And the output should not contain "ready-001"
+
   Scenario: Ready excludes closed tickets
     Given a ticket exists with ID "ready-001" and title "Closed ticket"
     And ticket "ready-001" has status "closed"
@@ -215,6 +228,15 @@ Feature: Ticket Listing
     Then the command should succeed
     And the output should contain "done-0001"
     And the output should contain "[closed]"
+    And the output should contain "Done ticket"
+
+  Scenario: Closed includes tickets with legacy done status
+    Given a ticket exists with ID "done-0001" and title "Done ticket"
+    And ticket "done-0001" has status "done"
+    When I run "ticket closed"
+    Then the command should succeed
+    And the output should contain "done-0001"
+    And the output should contain "[done]"
     And the output should contain "Done ticket"
 
   Scenario: Closed respects limit

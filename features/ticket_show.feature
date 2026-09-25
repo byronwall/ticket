@@ -41,6 +41,15 @@ Feature: Ticket Show
     Then the command should succeed
     And the output should not contain "## Blockers"
 
+  Scenario: Show treats done dependencies as closed
+    Given a ticket exists with ID "show-001" and title "Unblocked ticket"
+    And a ticket exists with ID "show-002" and title "Done dependency"
+    And ticket "show-001" depends on "show-002"
+    And ticket "show-002" has status "done"
+    When I run "ticket show show-001"
+    Then the command should succeed
+    And the output should not contain "## Blockers"
+
   Scenario: Show displays blocking section
     Given a ticket exists with ID "show-001" and title "Blocker"
     And a ticket exists with ID "show-002" and title "Blocked"

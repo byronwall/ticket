@@ -41,6 +41,20 @@ Feature: Ticket Status Management
     And the output should be "Updated test-0001 -> closed"
     And ticket "test-0001" should have field "status" with value "closed"
 
+  Scenario: Done is not a selectable status
+    When I run "ticket status test-0001 done"
+    Then the command should fail
+    And the output should contain "Error: invalid status 'done'"
+
+  Scenario: Start accepts a done dependency
+    Given ticket "test-0001" has status "ready"
+    And a ticket exists with ID "test-0002" and title "Done dependency"
+    And ticket "test-0001" depends on "test-0002"
+    And ticket "test-0002" has status "done"
+    When I run "ticket start test-0001"
+    Then the command should succeed
+    And ticket "test-0001" should have field "status" with value "in_progress"
+
   Scenario: Set status to open
     Given ticket "test-0001" has status "closed"
     When I run "ticket status test-0001 open"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.2.0
+# tk-plugin-version: 1.3.0
 
 """Local ticket graph with status updates. Python 3 standard library only."""
 
@@ -14,6 +14,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import webbrowser
 
@@ -86,18 +87,30 @@ PAGE = r"""<!doctype html>
   #fit { gap: 5px; font-size: 12px; }
   #edges { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
   #edges > path { fill: none; stroke: var(--edge); stroke-width: var(--w, 1.5px); }
+  #edges > path.edge-glow { stroke: var(--accent); stroke-width: 2.5px; opacity: 0; pointer-events: none; filter: drop-shadow(0 2px 4px #1f63b899); }
+  #edges > path.edge-glow.hovered, #edges > path.edge-glow.selected { opacity: 1; }
+  #edges > path.edge-hit { stroke: transparent; stroke-width: 14px; pointer-events: stroke; cursor: pointer; }
+  #edges > path.edge-hit:focus { outline: none; }
   #edges > path.related { stroke: var(--accent); stroke-width: calc(var(--w, 1.5px) + 0.75px); }
-  #edges.focused > path:not(.related) { stroke: #cdd4dc; }
+  #edges.focused > path:not(.related):not(.edge-glow):not(.edge-hit) { stroke: #cdd4dc; }
   .node { position: absolute; display: flex; flex-direction: column; gap: 3px; width: 240px; height: 104px; padding: 8px 11px 9px;
     border: 1px solid color-mix(in srgb, var(--color) 40%, var(--line)); border-radius: 7px; background: var(--surface);
     text-align: left; box-shadow: 0 1px 2px #17212c0f; cursor: pointer; }
   .node[data-status="in_progress"] { background: #fdf0de; border-color: #e3a55a; }
   .node[data-status="partially_implemented"] { background: #fff8f0; border-color: #c57435; }
   .node:hover { border-color: color-mix(in srgb, var(--color) 70%, var(--ink-3)); box-shadow: 0 2px 8px #17212c1a; }
-  .node[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 4px 12px #17212c1f; }
+  .node[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+  .node[aria-pressed="true"]:focus-visible { outline: none; }
   .node.related { border-color: var(--accent); }
-  .node[data-status="closed"] { background: var(--sunken); }
-  .node[data-status="closed"] .node-title { color: var(--ink-2); font-weight: 550; }
+  .node.connect-source { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+  #viewport.connecting .node { cursor: crosshair; }
+  #connection-hint { position: absolute; z-index: 2; top: 12px; left: 12px; max-width: calc(100% - 24px); padding: 6px 10px; border: 1px solid #a9c4e6; border-radius: 6px; background: var(--accent-soft); color: var(--accent); box-shadow: 0 2px 8px #17212c14; }
+  #connection-hint[hidden] { display: none; }
+  #toast { position: fixed; z-index: 20; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 24px); padding: 8px 10px 8px 14px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface); box-shadow: 0 5px 18px #17212c29; }
+  #toast[hidden] { display: none; }
+  #toast button { padding: 4px 9px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--surface); color: var(--accent); cursor: pointer; }
+  .node[data-status="closed"], .node[data-status="done"] { background: var(--sunken); }
+  .node[data-status="closed"] .node-title, .node[data-status="done"] .node-title { color: var(--ink-2); font-weight: 550; }
   #ticket-menu { position: fixed; z-index: 10; min-width: 190px; max-height: min(70vh, 440px); overflow: auto; padding: 5px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface); box-shadow: 0 8px 24px #17212c29; }
   #ticket-menu[hidden] { display: none; }
   #ticket-menu button { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 9px; border: 0; border-radius: 4px; background: none; text-align: left; cursor: pointer; }
@@ -120,8 +133,8 @@ PAGE = r"""<!doctype html>
   .status[data-status="ready"] { --status: #1f63b8; }
   .status[data-status="in_progress"] { --status: #c26a06; color: #8a4b04; }
   .status[data-status="partially_implemented"] { --status: #b65d17; color: #91460e; }
-  .status[data-status="in_progress"]::before, .status[data-status="closed"]::before { background: var(--status); }
-  .status[data-status="closed"] { --status: #a3adb8; color: var(--ink-3); }
+  .status[data-status="in_progress"]::before, .status[data-status="closed"]::before, .status[data-status="done"]::before { background: var(--status); }
+  .status[data-status="closed"], .status[data-status="done"] { --status: #a3adb8; color: var(--ink-3); }
   .empty-graph { position: absolute; top: 24px; left: 24px; margin: 0; color: var(--ink-3); white-space: nowrap; }
   aside { border-left: 1px solid var(--line); background: var(--surface); overflow: auto; container-type: inline-size; }
   #empty { padding: 20px; color: var(--ink-3); }
@@ -183,6 +196,7 @@ PAGE = r"""<!doctype html>
 </div></header>
 <main>
   <div id="left"><div id="legend"></div><div id="viewport">
+    <div id="connection-hint" role="status" hidden></div>
     <div id="controls" aria-label="Graph controls">
       <button id="zoom-out" type="button" aria-label="Zoom out"><svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg></button>
       <span id="zoom-level" aria-live="off">100%</span>
@@ -202,6 +216,7 @@ PAGE = r"""<!doctype html>
     <div id="body" class="markdown"></div>
   </div></aside>
 </main>
+<div id="toast" role="status" hidden><span id="toast-message"></span><button id="toast-undo" type="button">Undo</button></div>
 <div id="ticket-menu" role="menu" aria-label="Ticket actions" hidden></div>
 <script>
 const graph = document.querySelector('#graph');
@@ -213,6 +228,7 @@ const colors = new Map();
 let tickets = [], selected = null, structure = '', etag = '', project = '';
 let showClosed = false, showClosedEpics = false, epicFilter = null, promptText = '';
 let zoom = 1, panX = 0, panY = 0, drag = null, suppressClick = false, fitted = false;
+let connectFrom = null, selectedEdge = null, toastTimer = null;
 const NODE_W = 240, NODE_H = 104, ROW_PITCH = 132, MIN_GAP = 64;
 let rowCounts = [], bandCount = 1;
 const bandOf = (column, bands, columns) => Math.floor(column * bands / columns);
@@ -239,6 +255,7 @@ function chooseBandCount(counts) {
 const statusLabel = status => ({ in_progress: 'In progress', partially_implemented: 'Partially implemented' })[status] || status.charAt(0).toUpperCase() + status.slice(1);
 const nodeStatusLabel = status => status === 'partially_implemented' ? 'Partial' : statusLabel(status);
 const statuses = ['open', 'ready', 'in_progress', 'partially_implemented', 'closed'];
+const isClosed = status => status === 'closed' || status === 'done';
 const ticketMenu = document.querySelector('#ticket-menu');
 const assignee = ticket => ticket.metadata.assignee || '';
 function avatar(name) {
@@ -311,7 +328,7 @@ function openTicketMenu(ticket, x, y) {
   ticketMenu.append(unassigned, add, document.createElement('hr'), menuHeading('Set status'));
   ticketMenu.querySelector('hr').className = 'menu-divider';
   const map = byId();
-  const canStart = ['ready', 'in_progress', 'partially_implemented'].includes(ticket.status) && ticket.deps.every(id => map.get(id)?.status === 'closed');
+  const canStart = ['ready', 'in_progress', 'partially_implemented'].includes(ticket.status) && ticket.deps.every(id => isClosed(map.get(id)?.status));
   for (const status of statuses) {
     const option = document.createElement('button');
     option.type = 'button';
@@ -343,6 +360,58 @@ async function saveTicket(path, payload) {
 }
 function setStatus(id, expectedStatus, status) { return saveTicket('/api/status', { id, expectedStatus, status }); }
 function setAssignee(id, expectedAssignee, name) { return saveTicket('/api/assignee', { id, expectedAssignee, name }); }
+function setConnectFrom(id) {
+  connectFrom = id;
+  viewport.classList.toggle('connecting', id !== null);
+  document.querySelector('#connection-hint').hidden = id === null;
+  document.querySelector('#connection-hint').textContent = id ? `Connect from ${id}: select the dependent ticket · Esc to cancel` : 'Select a source ticket · Esc to cancel';
+  graph.querySelectorAll('.node').forEach(node => node.classList.toggle('connect-source', !!id && node.id === nodeId(id)));
+}
+let dependencyPending = false;
+async function changeDependency(from, to, action) {
+  if (dependencyPending) return false;
+  dependencyPending = true;
+  try {
+    const response = await fetch('/api/dependency', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to, action }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Dependency update failed');
+    etag = '';
+    await refresh();
+    return true;
+  } catch (error) {
+    document.querySelector('#error').textContent = error.message;
+    return false;
+  } finally { dependencyPending = false; }
+}
+function dismissToast() {
+  clearTimeout(toastTimer);
+  document.querySelector('#toast').hidden = true;
+  document.querySelector('#toast-undo').onclick = null;
+}
+function showUndoToast(from, to) {
+  dismissToast();
+  document.querySelector('#toast-message').textContent = `Connection created: ${from} → ${to}`;
+  document.querySelector('#toast').hidden = false;
+  document.querySelector('#toast-undo').onclick = async () => {
+    if (await changeDependency(from, to, 'remove')) dismissToast();
+  };
+  toastTimer = setTimeout(dismissToast, 5000);
+}
+async function selectNode(id) {
+  if (connectFrom !== null) {
+    if (!connectFrom) { setConnectFrom(id); return; }
+    if (connectFrom === id) { document.querySelector('#error').textContent = 'A ticket cannot depend on itself'; return; }
+    const from = connectFrom;
+    if (await changeDependency(from, id, 'add')) { setConnectFrom(null); showUndoToast(from, id); }
+    return;
+  }
+  selectedEdge = null;
+  selected = id;
+  updateSelection();
+}
 document.addEventListener('pointerdown', event => { if (!ticketMenu.contains(event.target)) closeTicketMenu(); });
 document.addEventListener('keydown', event => {
   if (ticketMenu.hidden) return;
@@ -453,7 +522,22 @@ resizer.addEventListener('keydown', event => {
 document.querySelector('#zoom-in').addEventListener('click', () => zoomAt(1.25, viewport.clientWidth / 2, viewport.clientHeight / 2));
 document.querySelector('#zoom-out').addEventListener('click', () => zoomAt(0.8, viewport.clientWidth / 2, viewport.clientHeight / 2));
 document.addEventListener('keydown', event => {
-  if (event.key.toLowerCase() !== 'f' || event.altKey || event.ctrlKey || event.metaKey || event.target.closest('input, textarea, [contenteditable]')) return;
+  if (event.altKey || event.ctrlKey || event.metaKey || event.target.closest('input, textarea, [contenteditable]') || !ticketMenu.hidden) return;
+  if (event.key === 'Escape' && connectFrom !== null) { setConnectFrom(null); event.preventDefault(); return; }
+  if (event.key === 'Delete' && selectedEdge) {
+    const { from, to } = selectedEdge;
+    changeDependency(from, to, 'remove').then(ok => { if (ok) { selectedEdge = null; updateSelection(); } });
+    event.preventDefault();
+    return;
+  }
+  if (event.key.toLowerCase() === 'c') {
+    selectedEdge = null;
+    setConnectFrom(selected && byId().has(selected) ? selected : '');
+    updateSelection();
+    event.preventDefault();
+    return;
+  }
+  if (event.key.toLowerCase() !== 'f') return;
   event.preventDefault();
   fit();
 });
@@ -461,8 +545,8 @@ const byId = () => new Map(tickets.map(t => [t.id, t]));
 function availableTickets() {
   const map = byId();
   return tickets.filter(t => t.type !== 'epic'
-    && (showClosed || t.status !== 'closed')
-    && (showClosedEpics || map.get(t.parent)?.status !== 'closed'));
+    && (showClosed || !isClosed(t.status))
+    && (showClosedEpics || !isClosed(map.get(t.parent)?.status)));
 }
 function visibleTickets() {
   return availableTickets().filter(t => !epicFilter || t.parent === epicFilter);
@@ -517,6 +601,47 @@ function updateAssigneeLegend() {
     host.append(key);
   }
 }
+// Swap adjacent nodes in a dependency column when their edge endpoints have
+// fewer inversions. A pair only matters when its sources or targets share a
+// column; those are the pairs whose order a node swap can change.
+function improveNodeOrder(columns, links, levels, band) {
+  const rows = new Map();
+  columns.forEach(column => column.forEach((id, row) => rows.set(id, row)));
+  const stride = Math.max(1, ...columns.map(column => column.length)) + 1;
+  const vertical = id => band(levels.get(id)) * stride + rows.get(id);
+  const pairs = [], byNode = new Map();
+  for (let i = 0; i < links.length; i++) for (let j = i + 1; j < links.length; j++) {
+    const a = links[i], b = links[j];
+    if (a.from === b.from || a.to === b.to || (a.start !== b.start && a.end !== b.end)) continue;
+    const index = pairs.push([a, b]) - 1;
+    for (const id of new Set([a.from, a.to, b.from, b.to])) {
+      if (!byNode.has(id)) byNode.set(id, []);
+      byNode.get(id).push(index);
+    }
+  }
+  const crossing = ([a, b]) => (vertical(a.from) - vertical(b.from)) * (vertical(a.to) - vertical(b.to)) < 0 ? 1 : 0;
+  for (let pass = 0; pass < 4; pass++) {
+    let improved = false;
+    for (const column of columns) for (let row = 0; row + 1 < column.length; row++) {
+      const a = column[row], b = column[row + 1];
+      const affected = new Set([...(byNode.get(a) || []), ...(byNode.get(b) || [])]);
+      if (!affected.size) continue;
+      const before = [...affected].reduce((sum, index) => sum + crossing(pairs[index]), 0);
+      rows.set(a, row + 1);
+      rows.set(b, row);
+      const after = [...affected].reduce((sum, index) => sum + crossing(pairs[index]), 0);
+      if (after < before) {
+        [column[row], column[row + 1]] = [b, a];
+        improved = true;
+      } else {
+        rows.set(a, row);
+        rows.set(b, row + 1);
+      }
+    }
+    if (!improved) break;
+  }
+  return columns;
+}
 function layout() {
   const visible = visibleTickets().sort((a, b) => group(a).localeCompare(group(b)) || a.id.localeCompare(b.id));
   const map = new Map(visible.map(t => [t.id, t]));
@@ -548,6 +673,9 @@ function layout() {
   for (const t of visible) rowCounts[levels.get(t.id)]++;
   bandCount = chooseBandCount(rowCounts);
   const band = column => bandOf(column, bandCount, maxLevel + 1);
+  const columns = Array.from({ length: maxLevel + 1 }, () => []);
+  for (const t of visible) columns[levels.get(t.id)].push(t.id);
+  improveNodeOrder(columns, links, levels, band);
   const lastBand = band(maxLevel);
   // Links between bands leave through the gap right of their source column,
   // run along the corridor under the source band, and enter through the gap
@@ -598,12 +726,10 @@ function layout() {
   for (let column = 0; column <= maxLevel; column++) bandRows[band(column)] = Math.max(bandRows[band(column)] || 0, rowCounts[column]);
   for (let b = 0; b < lastBand; b++) bandTop.push(bandTop[b] + bandRows[b] * ROW_PITCH - rowGap + 64 + (corridors.get(b)?.length || 0) * 6);
   const rows = new Map(), positions = new Map();
-  for (const t of visible) {
-    const column = levels.get(t.id);
-    const row = rows.get(column) || 0;
-    rows.set(column, row + 1);
-    positions.set(t.id, { x: columnX[column], y: bandTop[band(column)] + row * ROW_PITCH });
-  }
+  columns.forEach((ids, column) => {
+    rows.set(column, ids.length);
+    ids.forEach((id, row) => positions.set(id, { x: columnX[column], y: bandTop[band(column)] + row * ROW_PITCH }));
+  });
   const width = Math.max(400, ...[...positions.values()].map(p => p.x + NODE_W + 36));
   const nodeBottom = Math.max(0, ...[...positions.values()].map(p => p.y + NODE_H));
   const height = Math.max(250, nodeBottom + 36);
@@ -636,7 +762,7 @@ function layout() {
     button.id = nodeId(t.id);
     button.style.left = p.x + 'px';
     button.style.top = p.y + 'px';
-    button.addEventListener('click', () => { selected = t.id; updateSelection(); });
+    button.addEventListener('click', () => selectNode(t.id));
     button.addEventListener('contextmenu', event => { event.preventDefault(); openTicketMenu(byId().get(t.id), event.clientX, event.clientY); });
     button.addEventListener('keydown', event => {
       if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
@@ -802,6 +928,37 @@ function layout() {
       draw(pts.slice(2, 4), member.from, member.to, bundleWidth(side.get(key)), false);
     }
     draw(paths.get(link).slice(3), joined.map(member => member.from).join(' '), link.to, bundleWidth(joined.length), true);
+  }
+  for (const link of links) {
+    const glow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const pts = paths.get(link);
+    const hit = link.bundle?.length > 1 ? pts.slice(0, 3) : pts;
+    glow.setAttribute('d', pts.map(([x, y], i) => i === 0 ? `M ${x} ${y}` : pts[i - 1][1] === y ? `H ${x}` : `V ${y}`).join(' '));
+    glow.setAttribute('marker-end', 'url(#arrow)');
+    glow.classList.add('edge-glow');
+    path.setAttribute('d', hit.map(([x, y], i) => i === 0 ? `M ${x} ${y}` : hit[i - 1][1] === y ? `H ${x}` : `V ${y}`).join(' '));
+    path.classList.add('edge-hit');
+    path.dataset.from = link.from;
+    path.dataset.to = link.to;
+    path.setAttribute('aria-label', `${link.from} to ${link.to}; click to select, Delete to remove`);
+    path.setAttribute('role', 'button');
+    path.setAttribute('tabindex', '0');
+    path.addEventListener('pointerenter', () => glow.classList.add('hovered'));
+    path.addEventListener('pointerleave', () => glow.classList.remove('hovered'));
+    path.addEventListener('focus', () => glow.classList.add('hovered'));
+    path.addEventListener('blur', () => glow.classList.remove('hovered'));
+    const select = () => {
+      setConnectFrom(null);
+      selected = null;
+      selectedEdge = { from: link.from, to: link.to };
+      updateSelection();
+    };
+    path.addEventListener('click', event => { event.stopPropagation(); select(); });
+    path.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); }
+    });
+    edges.append(glow, path);
   }
   if (!visible.length) graph.append(Object.assign(document.createElement('p'), { className: 'empty-graph', textContent: 'No tickets to show.' }));
 }
@@ -984,19 +1141,29 @@ const listValue = value => (value || '').replace(/^\[|\]$/g, '').split(',').map(
 function openTicket(id) { selected = id; updateSelection(); }
 function updateSelection() {
   const related = new Set();
-  edges.querySelectorAll('path[data-from]').forEach(path => {
+  if (connectFrom === null) {
+    const hint = document.querySelector('#connection-hint');
+    hint.hidden = !selectedEdge;
+    if (selectedEdge) hint.textContent = `${selectedEdge.from} → ${selectedEdge.to} · Delete to remove dependency`;
+  }
+  edges.querySelectorAll('path.edge-hit').forEach(path => {
+    path.previousElementSibling.classList.toggle('selected', !!selectedEdge && path.dataset.from === selectedEdge.from && path.dataset.to === selectedEdge.to);
+  });
+  const firstGlow = edges.querySelector('path.edge-glow');
+  edges.querySelectorAll('path[data-from]:not(.edge-hit)').forEach(path => {
     const sources = path.dataset.from.split(' ');
     const hit = sources.includes(selected) || path.dataset.to === selected;
     path.classList.toggle('related', hit);
     if (hit) {
       for (const id of path.dataset.to === selected ? sources : [selected]) related.add(id);
       related.add(path.dataset.to);
-      edges.append(path);
+      edges.insertBefore(path, firstGlow);
     }
   });
   graph.querySelectorAll('.node').forEach(n => {
     n.setAttribute('aria-pressed', String(n.id === nodeId(selected)));
     n.classList.toggle('related', n.id !== nodeId(selected) && [...related].some(id => n.id === nodeId(id)));
+    n.classList.toggle('connect-source', !!connectFrom && n.id === nodeId(connectFrom));
   });
   edges.classList.toggle('focused', related.size > 0);
   const t = byId().get(selected);
@@ -1076,6 +1243,9 @@ function render() {
   updateLegend();
   updateAssigneeLegend();
   const visible = visibleTickets();
+  const visibleIds = new Set(visible.map(t => t.id));
+  if (connectFrom && !visibleIds.has(connectFrom)) setConnectFrom(null);
+  if (selectedEdge && (!visibleIds.has(selectedEdge.from) || !visibleIds.has(selectedEdge.to) || !byId().get(selectedEdge.to)?.deps.includes(selectedEdge.from))) selectedEdge = null;
   const key = visible.map(t => t.id + ':' + t.parent + ':' + t.deps.join(',')).sort().join('|');
   if (key !== structure) { structure = key; layout(); }
   updateNodes();
@@ -1182,6 +1352,46 @@ def write_assignee(path, expected, name):
             temporary.unlink(missing_ok=True)
 
 
+def write_dependencies(path, deps):
+    content = path.read_bytes().decode("utf-8")
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        raise ValueError("Ticket has no front matter")
+    end = next((index for index, line in enumerate(lines[1:], 1) if line.strip() == "---"), None)
+    if end is None:
+        raise ValueError("Ticket has no front matter")
+    index = next((index for index in range(1, end) if re.match(r"^deps\s*:", lines[index])), None)
+    newline = "\r\n" if "\r\n" in content else "\n"
+    line = f"deps: [{', '.join(deps)}]{newline}"
+    if index is None:
+        lines.insert(end, line)
+    else:
+        lines[index] = line
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            output.write("".join(lines).encode("utf-8"))
+        os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
+        os.replace(temporary, path)
+    finally:
+        if temporary:
+            temporary.unlink(missing_ok=True)
+
+
+def would_cycle(tickets, source, target):
+    graph = {ticket["id"]: ticket["deps"] for ticket in tickets}
+    pending, seen = [source], set()
+    while pending:
+        current = pending.pop()
+        if current == target:
+            return True
+        if current not in seen:
+            seen.add(current)
+            pending.extend(graph.get(current, []))
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Open a live ticket graph")
     parser.add_argument("--port", type=int, default=0, help="Local port (default: automatic)")
@@ -1192,6 +1402,7 @@ def main():
         parser.error("No .tickets directory found; run from a ticket project")
     local_ticket = Path(__file__).resolve().parent.parent / "ticket"
     ticket_command = os.environ.get("TK_SCRIPT") or (str(local_ticket) if local_ticket.is_file() else None) or shutil.which("ticket") or shutil.which("tk")
+    dependency_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -1207,7 +1418,7 @@ def main():
             self.wfile.write(payload)
 
         def do_POST(self):
-            if self.path not in ("/api/status", "/api/assignee"):
+            if self.path not in ("/api/status", "/api/assignee", "/api/dependency"):
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
@@ -1224,13 +1435,43 @@ def main():
                 if not 0 < length <= 4096:
                     raise ValueError()
                 data = json.loads(self.rfile.read(length))
-                ticket_id = data["id"]
-                expected = data["expectedStatus" if self.path == "/api/status" else "expectedAssignee"]
-                value = data["status" if self.path == "/api/status" else "name"]
-                if not all(isinstance(item, str) for item in (ticket_id, expected, value)):
-                    raise ValueError()
+                if self.path == "/api/dependency":
+                    source, target, action = data["from"], data["to"], data["action"]
+                    if not all(isinstance(item, str) for item in (source, target, action)):
+                        raise ValueError()
+                else:
+                    ticket_id = data["id"]
+                    expected = data["expectedStatus" if self.path == "/api/status" else "expectedAssignee"]
+                    value = data["status" if self.path == "/api/status" else "name"]
+                    if not all(isinstance(item, str) for item in (ticket_id, expected, value)):
+                        raise ValueError()
             except (ValueError, KeyError, TypeError):
                 self.send_json(400, {"error": "Invalid ticket update request"})
+                return
+            if self.path == "/api/dependency":
+                if action not in ("add", "remove") or source == target:
+                    self.send_json(400, {"error": "Invalid dependency"})
+                    return
+                with dependency_lock:
+                    tickets = tickets_from(directory)
+                    mapped = {ticket["id"]: ticket for ticket in tickets}
+                    if source not in mapped or target not in mapped:
+                        self.send_json(404, {"error": "Ticket not found"})
+                        return
+                    deps = mapped[target]["deps"]
+                    if (action == "add" and source in deps) or (action == "remove" and source not in deps):
+                        self.send_json(409, {"error": "Dependency already exists" if action == "add" else "Dependency no longer exists"})
+                        return
+                    if action == "add" and would_cycle(tickets, source, target):
+                        self.send_json(409, {"error": "Connection would create a dependency cycle"})
+                        return
+                    next_deps = deps + [source] if action == "add" else [dep for dep in deps if dep != source]
+                    try:
+                        write_dependencies(directory / f"{target}.md", next_deps)
+                    except (OSError, UnicodeError, ValueError) as error:
+                        self.send_json(400, {"error": str(error)})
+                        return
+                self.send_json(200, {"from": source, "to": target, "action": action})
                 return
             current = next((ticket for ticket in tickets_from(directory) if ticket["id"] == ticket_id), None)
             if not current:

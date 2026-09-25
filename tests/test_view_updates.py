@@ -1,4 +1,4 @@
-"""Check status and assignee updates from the viewer."""
+"""Check status, assignee, and dependency updates from the viewer."""
 
 import json
 import os
@@ -38,12 +38,16 @@ with TemporaryDirectory() as temp:
         def set_assignee(ticket_id, expected, name):
             return post("/api/assignee", {"id": ticket_id, "expectedAssignee": expected, "name": name})
 
+        def dependency(source, target, action):
+            return post("/api/dependency", {"from": source, "to": target, "action": action})
+
         assert set_status("task", "open", "ready") == (200, {"status": "ready"})
         assert "status: ready" in (directory / "task.md").read_text()
         assert set_status("task", "open", "closed")[0] == 409
+        assert set_status("task", "ready", "done")[0] == 400
         assert set_status("task", "ready", "in_progress")[0] == 400
         assert "status: ready" in (directory / "task.md").read_text()
-        assert set_status("dep", "open", "closed") == (200, {"status": "closed"})
+        (directory / "dep.md").write_text((directory / "dep.md").read_text().replace("status: open", "status: done"))
         assert set_status("task", "ready", "in_progress") == (200, {"status": "in_progress"})
         assert "status: in_progress" in (directory / "task.md").read_text()
         assert set_status("task", "in_progress", "partially_implemented") == (200, {"status": "partially_implemented"})
@@ -58,6 +62,20 @@ with TemporaryDirectory() as temp:
         assert set_assignee("task", "Byron Wall", "") == (200, {"assignee": ""})
         assert "assignee:" not in (directory / "task.md").read_text()
         assert "# Task" in (directory / "task.md").read_text()
+        assert dependency("task", "dep", "add")[0] == 409
+        assert (directory / "dep.md").read_text().split("deps: ")[1].startswith("[]")
+        assert dependency("dep", "task", "add")[0] == 409
+        assert dependency("dep", "task", "remove") == (200, {"from": "dep", "to": "task", "action": "remove"})
+        assert "deps: []" in (directory / "task.md").read_text()
+        assert dependency("dep", "task", "remove")[0] == 409
+        assert dependency("task", "dep", "add") == (200, {"from": "task", "to": "dep", "action": "add"})
+        assert "deps: [task]" in (directory / "dep.md").read_text()
+        assert dependency("dep", "task", "add")[0] == 409
+        assert dependency("task", "dep", "remove")[0] == 200
+        assert dependency("dep", "task", "add")[0] == 200
+        assert "deps: [dep]" in (directory / "task.md").read_text()
+        assert dependency("task", "task", "add")[0] == 400
+        assert dependency("missing", "task", "add")[0] == 404
     finally:
         server.terminate()
         server.wait(timeout=5)

@@ -2,7 +2,7 @@
 
 Official plugins that extend `tk` with additional commands.
 
-`ticket-view` serves a local graph for the current `.tickets/` folder. A node's right-click menu changes its assignee or status; status changes use the ticket command. It requires Python 3. The source checkout also exposes it as `tk view`.
+`ticket-view` serves a local graph for the current `.tickets/` folder. A node's right-click menu changes its assignee or status; status changes use the ticket command. Press `C` and select source and target tickets to add a dependency, or select an arrow and press Delete to remove it. It requires Python 3. The source checkout also exposes it as `tk view`.
 
 ## Writing Plugins
 

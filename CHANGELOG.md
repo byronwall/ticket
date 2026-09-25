@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- Existing `done` tickets and epics now count as closed in the viewer and ticket dependency filters, while `closed` remains the selectable status
 - `partially_implemented` records started but unfinished work; eligible tickets appear in `frontier`, can resume with `start`, and appear in the viewer
 - `ready` now lists only refined tickets with closed dependencies; `start` requires both conditions
 - Extracted `edit`, `ls`, `query`, and `migrate-beads` commands to plugins (ticket-extras)
@@ -22,6 +23,8 @@
 - CI scripts for publishing to Homebrew tap and AUR
 
 ### Plugins
+- ticket-view 1.3.0: Add and remove dependencies in the graph with cycle checks and a five-second undo toast for new connections; fix arrow rendering and keep selected and hovered edge highlights above the base arrows
+- ticket-view 1.2.1: Reduce graph edge crossings by swapping nodes within dependency columns before routing links
 - ticket-view 1.2.0: Show and edit partially implemented status
 - ticket-view 1.1.0: Link plain URLs, edit status and assignee from a node's context menu, and show assignee avatars
 - ticket-edit 1.0.0: Open ticket in $EDITOR (extracted from core)

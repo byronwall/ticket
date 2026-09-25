@@ -113,6 +113,8 @@ Click an epic name to filter its tickets; click it again to clear the filter.
 The epic filter is disabled when only one epic is available.
 Right-click a ticket node to set its assignee or status. The assignee list includes names already used by tickets, Agent, Unassigned, and Add new for entering a name. Assignees appear as colored initials in the header legend, on nodes, and in the inspector. The status list offers open, ready, in progress, partially implemented, and closed; entering in progress follows the same readiness and dependency checks as `tk status`. Nodes abbreviate partially implemented as Partial, while the inspector shows its full name. Press Shift+F10 on a focused node to open the menu from the keyboard.
 
+Press `C` to connect tickets. If a ticket is selected, it becomes the source; otherwise click a source ticket, then click the dependent target. The arrow points from source to target. Cycles and duplicate dependencies are rejected. Press Escape to cancel. After a connection is created, an Undo button appears in a toast at the top of the screen for five seconds. Click an arrow to select it, then press Delete to remove that dependency.
+
 The graph fits itself on first load. Drag to pan. Use the mouse wheel or the
 +/- buttons to zoom. Press `F` or click Fit to show all visible nodes. Select a
 ticket to highlight its dependency edges and read styled Markdown and front
