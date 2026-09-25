@@ -114,6 +114,7 @@ tickets appear as nodes grouped by epic within each column. Closed tickets are
 hidden by default. Show closed tickets, then show closed epics, to reveal older work.
 Click an epic name to filter its tickets; click it again to clear the filter.
 The epic filter is disabled when only one epic is available.
+Right-click a ticket node to set its assignee or status. The assignee list includes names already used by tickets, Agent, Unassigned, and Add new for entering a name. Assignees appear as colored initials in the header legend, on nodes, and in the inspector. The status list offers open, ready, in progress, and closed; entering in progress follows the same readiness and dependency checks as `tk status`. Press Shift+F10 on a focused node to open the menu from the keyboard.
 
 The graph fits itself on first load. Drag to pan. Use the mouse wheel or the
 +/- buttons to zoom. Press `F` or click Fit to show all visible nodes. Select a

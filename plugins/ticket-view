@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.0.0
+# tk-plugin-version: 1.1.0
 
-"""Local, read-only ticket graph. Python 3 standard library only."""
+"""Local ticket graph with status updates. Python 3 standard library only."""
 
 import argparse
 import hashlib
@@ -10,6 +10,10 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import stat
+import subprocess
+import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import webbrowser
 
@@ -40,6 +44,11 @@ PAGE = r"""<!doctype html>
   .app-name { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
   #count { padding: 2px 8px; border-radius: 999px; background: var(--sunken); border: 1px solid var(--line); color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   #count:empty, #error:empty { display: none; }
+  #assignee-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+  #assignee-legend:empty { display: none; }
+  .assignee-legend-label { color: var(--ink-3); font-size: 12px; }
+  .assignee-key { display: inline-flex; align-items: center; gap: 4px; max-width: 160px; color: var(--ink-2); font-size: 12px; white-space: nowrap; }
+  .assignee-key-name { overflow: hidden; text-overflow: ellipsis; }
   #error { color: var(--danger); font-weight: 550; }
   #filters { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; }
   #filters label { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px; white-space: nowrap; cursor: pointer; color: var(--ink-2); font-size: 12px; font-weight: 550; }
@@ -88,9 +97,22 @@ PAGE = r"""<!doctype html>
   .node.related { border-color: var(--accent); }
   .node[data-status="closed"] { background: var(--sunken); }
   .node[data-status="closed"] .node-title { color: var(--ink-2); font-weight: 550; }
+  #ticket-menu { position: fixed; z-index: 10; min-width: 190px; max-height: min(70vh, 440px); overflow: auto; padding: 5px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface); box-shadow: 0 8px 24px #17212c29; }
+  #ticket-menu[hidden] { display: none; }
+  #ticket-menu button { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 9px; border: 0; border-radius: 4px; background: none; text-align: left; cursor: pointer; }
+  #ticket-menu button:hover:not(:disabled), #ticket-menu button:focus-visible { background: var(--accent-soft); color: var(--accent); }
+  #ticket-menu button:disabled { color: var(--ink-3); cursor: default; }
+  .menu-heading { margin: 3px 9px 4px; color: var(--ink-3); font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
+  .menu-divider { margin: 5px 0; border: 0; border-top: 1px solid var(--line); }
+  #ticket-menu form { display: grid; gap: 7px; padding: 5px; }
+  #ticket-menu input { width: 220px; padding: 6px 8px; border: 1px solid var(--line-2); border-radius: 4px; font: inherit; }
+  .menu-actions { display: flex; gap: 4px; }
+  .avatar { --avatar-hue: 210; display: inline-grid; place-items: center; width: 19px; height: 19px; flex: none; border: 1px solid hsl(var(--avatar-hue) 45% 68%); border-radius: 50%; background: hsl(var(--avatar-hue) 62% 88%); color: hsl(var(--avatar-hue) 65% 24%); font-size: 9px; font-weight: 750; letter-spacing: -.03em; line-height: 1; }
+  .avatar.unassigned { border-color: var(--line-2); background: var(--sunken); color: var(--ink-3); }
   .node-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: var(--ink-3); white-space: nowrap; }
+  .node-assignee { margin-left: auto; }
   .node-id { font-family: var(--mono); font-size: 11.5px; }
-  .node-priority { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .node-priority { font-variant-numeric: tabular-nums; }
   .node-title { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; font-weight: 620; font-size: 14px; line-height: 1.3; color: var(--ink); }
   .status { --status: #7b8794; display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); white-space: nowrap; }
   .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--status); flex: none; }
@@ -106,6 +128,7 @@ PAGE = r"""<!doctype html>
   #details { padding: 16px 22px 32px; }
   aside h2 { margin: 0; font-size: 17px; font-weight: 650; line-height: 1.3; letter-spacing: -0.01em; text-wrap: balance; }
   .summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 6px 0 12px; color: var(--ink-2); font-size: 12px; }
+  .assignee-detail { display: inline-flex; align-items: center; gap: 5px; }
   .summary:empty { display: none; }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; }
   .actions button { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); cursor: pointer; }
@@ -152,7 +175,7 @@ PAGE = r"""<!doctype html>
 </style>
 </head>
 <body>
-<header><div class="brand"><h1 id="project">Ticket view</h1><span class="app-name" hidden>Ticket view</span></div><span id="count"></span><span id="error" role="status"></span><div id="filters">
+<header><div class="brand"><h1 id="project">Ticket view</h1><span class="app-name" hidden>Ticket view</span></div><span id="count"></span><div id="assignee-legend" aria-label="Assignees"></div><span id="error" role="status"></span><div id="filters">
   <label><input id="show-closed" type="checkbox"> Show closed tickets</label>
   <label id="closed-epic-label" hidden><input id="show-closed-epics" type="checkbox"> Show closed epics</label>
 </div></header>
@@ -177,6 +200,7 @@ PAGE = r"""<!doctype html>
     <div id="body" class="markdown"></div>
   </div></aside>
 </main>
+<div id="ticket-menu" role="menu" aria-label="Ticket actions" hidden></div>
 <script>
 const graph = document.querySelector('#graph');
 const edges = document.querySelector('#edges');
@@ -211,6 +235,122 @@ function chooseBandCount(counts) {
   return best;
 }
 const statusLabel = status => ({ in_progress: 'In progress' })[status] || status.charAt(0).toUpperCase() + status.slice(1);
+const statuses = ['open', 'ready', 'in_progress', 'closed'];
+const ticketMenu = document.querySelector('#ticket-menu');
+const assignee = ticket => ticket.metadata.assignee || '';
+function avatar(name) {
+  const element = document.createElement('span');
+  element.className = 'avatar' + (name ? '' : ' unassigned');
+  const words = name.trim().split(/\s+/);
+  element.textContent = name ? (words.length > 1 ? words[0][0] + words.at(-1)[0] : [...name].slice(0, 2).join('')).toUpperCase() : '?';
+  let hash = 2166136261;
+  for (const char of name.toLowerCase()) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  element.style.setProperty('--avatar-hue', (hash >>> 0) % 360);
+  element.title = name || 'Unassigned';
+  element.setAttribute('aria-hidden', 'true');
+  return element;
+}
+function knownAssignees() {
+  return ['Agent', ...new Set(tickets.map(assignee).filter(name => name && name.toLowerCase() !== 'agent'))].sort((a, b) => a === 'Agent' ? -1 : b === 'Agent' ? 1 : a.localeCompare(b));
+}
+function closeTicketMenu() { ticketMenu.hidden = true; ticketMenu.replaceChildren(); }
+function menuHeading(text) {
+  return Object.assign(document.createElement('div'), { className: 'menu-heading', textContent: text });
+}
+function showAssigneeInput(ticket) {
+  ticketMenu.setAttribute('role', 'dialog');
+  ticketMenu.setAttribute('aria-label', 'Add assignee');
+  const form = document.createElement('form');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.name = 'assignee';
+  input.placeholder = 'Name';
+  input.maxLength = 80;
+  input.required = true;
+  const actions = document.createElement('div');
+  actions.className = 'menu-actions';
+  const save = Object.assign(document.createElement('button'), { type: 'submit', textContent: 'Save' });
+  const cancel = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Cancel' });
+  cancel.addEventListener('click', () => openTicketMenu(byId().get(ticket.id), ticketMenu.offsetLeft, ticketMenu.offsetTop));
+  actions.append(save, cancel);
+  form.append(input, actions);
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const name = input.value.trim();
+    if (name) setAssignee(ticket.id, assignee(ticket), name);
+  });
+  ticketMenu.replaceChildren(menuHeading('Add assignee'), form);
+  input.focus();
+}
+function openTicketMenu(ticket, x, y) {
+  selected = ticket.id;
+  updateSelection();
+  ticketMenu.setAttribute('role', 'menu');
+  ticketMenu.setAttribute('aria-label', 'Ticket actions');
+  ticketMenu.replaceChildren(menuHeading('Set assignee'));
+  for (const name of knownAssignees()) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.setAttribute('role', 'menuitemradio');
+    option.setAttribute('aria-checked', String(name.toLowerCase() === assignee(ticket).toLowerCase()));
+    option.disabled = name.toLowerCase() === assignee(ticket).toLowerCase();
+    option.append(avatar(name), document.createTextNode(name));
+    option.addEventListener('click', () => setAssignee(ticket.id, assignee(ticket), name));
+    ticketMenu.append(option);
+  }
+  const unassigned = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Unassigned' });
+  unassigned.setAttribute('role', 'menuitemradio');
+  unassigned.setAttribute('aria-checked', String(!assignee(ticket)));
+  unassigned.disabled = !assignee(ticket);
+  unassigned.addEventListener('click', () => setAssignee(ticket.id, assignee(ticket), ''));
+  const add = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Add new…' });
+  add.addEventListener('click', () => showAssigneeInput(ticket));
+  ticketMenu.append(unassigned, add, document.createElement('hr'), menuHeading('Set status'));
+  ticketMenu.querySelector('hr').className = 'menu-divider';
+  const map = byId();
+  const canStart = ['ready', 'in_progress'].includes(ticket.status) && ticket.deps.every(id => map.get(id)?.status === 'closed');
+  for (const status of statuses) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.setAttribute('role', 'menuitemradio');
+    option.setAttribute('aria-checked', String(status === ticket.status));
+    option.textContent = statusLabel(status);
+    option.disabled = status === ticket.status || (status === 'in_progress' && !canStart);
+    if (status === 'in_progress' && !canStart) option.title = 'Requires ready status and closed dependencies';
+    option.addEventListener('click', () => setStatus(ticket.id, ticket.status, status));
+    ticketMenu.append(option);
+  }
+  ticketMenu.hidden = false;
+  ticketMenu.style.left = Math.max(8, Math.min(x, innerWidth - ticketMenu.offsetWidth - 8)) + 'px';
+  ticketMenu.style.top = Math.max(8, Math.min(y, innerHeight - ticketMenu.offsetHeight - 8)) + 'px';
+  ticketMenu.querySelector('button:not(:disabled)')?.focus();
+}
+async function saveTicket(path, payload) {
+  closeTicketMenu();
+  try {
+    const response = await fetch(path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Ticket update failed');
+    etag = '';
+    await refresh();
+  } catch (error) { document.querySelector('#error').textContent = error.message; }
+}
+function setStatus(id, expectedStatus, status) { return saveTicket('/api/status', { id, expectedStatus, status }); }
+function setAssignee(id, expectedAssignee, name) { return saveTicket('/api/assignee', { id, expectedAssignee, name }); }
+document.addEventListener('pointerdown', event => { if (!ticketMenu.contains(event.target)) closeTicketMenu(); });
+document.addEventListener('keydown', event => {
+  if (ticketMenu.hidden) return;
+  if (event.key === 'Escape') { closeTicketMenu(); document.getElementById(nodeId(selected))?.focus(); event.preventDefault(); return; }
+  if (event.target.closest('input')) return;
+  if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+  const options = [...ticketMenu.querySelectorAll('button:not(:disabled)')];
+  const index = options.indexOf(document.activeElement);
+  options[(index + (event.key === 'ArrowDown' ? 1 : options.length - 1)) % options.length]?.focus();
+  event.preventDefault();
+});
 function transform() {
   graph.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
   document.querySelector('#zoom-level').textContent = Math.round(zoom * 100) + '%';
@@ -360,6 +500,20 @@ function updateLegend() {
   }
   if (!groups.length) legend.textContent = 'No epics';
 }
+function updateAssigneeLegend() {
+  const host = document.querySelector('#assignee-legend');
+  host.replaceChildren();
+  const names = [...new Set(tickets.filter(t => t.type !== 'epic').map(assignee))].sort((a, b) => a.localeCompare(b));
+  if (!names.length) return;
+  host.append(Object.assign(document.createElement('span'), { className: 'assignee-legend-label', textContent: 'Assignees' }));
+  for (const name of names) {
+    const key = document.createElement('span');
+    key.className = 'assignee-key';
+    key.title = name || 'Unassigned';
+    key.append(avatar(name), Object.assign(document.createElement('span'), { className: 'assignee-key-name', textContent: name || 'Unassigned' }));
+    host.append(key);
+  }
+}
 function layout() {
   const visible = visibleTickets().sort((a, b) => group(a).localeCompare(group(b)) || a.id.localeCompare(b.id));
   const map = new Map(visible.map(t => [t.id, t]));
@@ -480,6 +634,14 @@ function layout() {
     button.style.left = p.x + 'px';
     button.style.top = p.y + 'px';
     button.addEventListener('click', () => { selected = t.id; updateSelection(); });
+    button.addEventListener('contextmenu', event => { event.preventDefault(); openTicketMenu(byId().get(t.id), event.clientX, event.clientY); });
+    button.addEventListener('keydown', event => {
+      if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+        event.preventDefault();
+        const rect = button.getBoundingClientRect();
+        openTicketMenu(byId().get(t.id), rect.left + 12, rect.top + 12);
+      }
+    });
     graph.append(button);
   }
   const pos = id => positions.get(id);
@@ -653,16 +815,42 @@ function updateNodes() {
     status.dataset.status = t.status;
     meta.append(dot, span('node-id', t.id), status);
     if (t.metadata.priority) meta.append(span('node-priority', 'P' + t.metadata.priority));
+    const owner = span('node-assignee', '');
+    owner.append(avatar(assignee(t)));
+    owner.title = assignee(t) || 'Unassigned';
+    meta.append(owner);
     button.replaceChildren(meta, span('node-title', t.title));
-    button.title = t.title;
-    button.setAttribute('aria-label', `${t.id}: ${t.title}, ${statusLabel(t.status)}`);
+    button.title = `${t.title} · ${assignee(t) || 'Unassigned'}`;
+    button.setAttribute('aria-label', `${t.id}: ${t.title}, ${statusLabel(t.status)}, assignee ${assignee(t) || 'unassigned'}`);
   }
+}
+function appendLinkedText(host, value) {
+  const urls = /(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
+  let end = 0;
+  for (const match of value.matchAll(urls)) {
+    const start = match.index;
+    if (start > 0 && /[\w@]/.test(value[start - 1])) continue;
+    let url = match[0].replace(/[.,;:!?]+$/, '');
+    for (const [open, close] of [['(', ')'], ['[', ']'], ['{', '}']]) {
+      while (url.endsWith(close) && url.split(close).length > url.split(open).length) url = url.slice(0, -1);
+    }
+    if (!url) continue;
+    host.append(document.createTextNode(value.slice(end, start)));
+    const link = document.createElement('a');
+    link.href = /^www\./i.test(url) ? 'https://' + url : url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = url;
+    host.append(link);
+    end = start + url.length;
+  }
+  host.append(document.createTextNode(value.slice(end)));
 }
 function appendInline(host, value) {
   const pattern = /(\x60[^\x60]+\x60|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
   let end = 0;
   for (const match of value.matchAll(pattern)) {
-    host.append(document.createTextNode(value.slice(end, match.index)));
+    appendLinkedText(host, value.slice(end, match.index));
     const token = match[0];
     let element;
     if (token.startsWith('\x60')) {
@@ -670,10 +858,10 @@ function appendInline(host, value) {
       element.textContent = token.slice(1, -1);
     } else if (token.startsWith('**')) {
       element = document.createElement('strong');
-      element.textContent = token.slice(2, -2);
+      appendLinkedText(element, token.slice(2, -2));
     } else if (token.startsWith('*')) {
       element = document.createElement('em');
-      element.textContent = token.slice(1, -1);
+      appendLinkedText(element, token.slice(1, -1));
     } else {
       const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
       if (/^https?:\/\//.test(link[2])) {
@@ -689,7 +877,7 @@ function appendInline(host, value) {
     host.append(element);
     end = match.index + token.length;
   }
-  host.append(document.createTextNode(value.slice(end)));
+  appendLinkedText(host, value.slice(end));
 }
 function renderMarkdown(value) {
   const host = document.querySelector('#body');
@@ -821,9 +1009,13 @@ function updateSelection() {
   const status = Object.assign(document.createElement('span'), { className: 'status', textContent: statusLabel(t.status) });
   status.dataset.status = t.status;
   summary.replaceChildren(status);
-  for (const value of [t.type, t.metadata.priority && 'P' + t.metadata.priority, t.metadata.assignee]) {
+  for (const value of [t.type, t.metadata.priority && 'P' + t.metadata.priority]) {
     if (value) summary.append(Object.assign(document.createElement('span'), { textContent: value }));
   }
+  const owner = document.createElement('span');
+  owner.className = 'assignee-detail';
+  owner.append(avatar(assignee(t)), document.createTextNode('Assignee: ' + (assignee(t) || 'Unassigned')));
+  summary.append(owner);
   if (t.metadata.created) summary.append(Object.assign(document.createElement('span'), { textContent: t.metadata.created.slice(0, 10), title: 'Created ' + t.metadata.created }));
   renderMarkdown(t.body);
   const meta = document.querySelector('#metadata');
@@ -876,7 +1068,9 @@ function relayoutForViewport() {
 }
 addEventListener('resize', relayoutForViewport);
 function render() {
+  closeTicketMenu();
   updateLegend();
+  updateAssigneeLegend();
   const visible = visibleTickets();
   const key = visible.map(t => t.id + ':' + t.parent + ':' + t.deps.join(',')).sort().join('|');
   if (key !== structure) { structure = key; layout(); }
@@ -955,6 +1149,35 @@ def tickets_from(directory):
     return tickets
 
 
+def write_assignee(path, expected, name):
+    content = path.read_bytes().decode("utf-8")
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        raise ValueError("Ticket has no front matter")
+    end = next((index for index, line in enumerate(lines[1:], 1) if line.strip() == "---"), None)
+    if end is None:
+        raise ValueError("Ticket has no front matter")
+    index = next((index for index in range(1, end) if lines[index].lstrip().startswith("assignee:")), None)
+    current = lines[index].split(":", 1)[1].strip() if index is not None else ""
+    if current != expected:
+        raise RuntimeError("Ticket assignee changed; try again")
+    newline = "\r\n" if "\r\n" in content else "\n"
+    if index is not None:
+        lines[index:index + 1] = [f"assignee: {name}{newline}"] if name else []
+    elif name:
+        lines.insert(end, f"assignee: {name}{newline}")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            output.write("".join(lines).encode("utf-8"))
+        os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
+        os.replace(temporary, path)
+    finally:
+        if temporary:
+            temporary.unlink(missing_ok=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Open a live ticket graph")
     parser.add_argument("--port", type=int, default=0, help="Local port (default: automatic)")
@@ -963,10 +1186,88 @@ def main():
     directory = Path(os.environ.get("TICKETS_DIR", ".tickets")).expanduser().resolve()
     if not directory.is_dir():
         parser.error("No .tickets directory found; run from a ticket project")
+    local_ticket = Path(__file__).resolve().parent.parent / "ticket"
+    ticket_command = os.environ.get("TK_SCRIPT") or (str(local_ticket) if local_ticket.is_file() else None) or shutil.which("ticket") or shutil.which("tk")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
             pass
+
+        def send_json(self, status, data):
+            payload = json.dumps(data).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_POST(self):
+            if self.path not in ("/api/status", "/api/assignee"):
+                self.send_error(404)
+                return
+            origin = self.headers.get("Origin")
+            host = self.headers.get("Host")
+            allowed_hosts = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
+            if host not in allowed_hosts or (origin and origin != f"http://{host}"):
+                self.send_json(403, {"error": "Invalid request origin"})
+                return
+            if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
+                self.send_json(415, {"error": "Expected JSON request"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 4096:
+                    raise ValueError()
+                data = json.loads(self.rfile.read(length))
+                ticket_id = data["id"]
+                expected = data["expectedStatus" if self.path == "/api/status" else "expectedAssignee"]
+                value = data["status" if self.path == "/api/status" else "name"]
+                if not all(isinstance(item, str) for item in (ticket_id, expected, value)):
+                    raise ValueError()
+            except (ValueError, KeyError, TypeError):
+                self.send_json(400, {"error": "Invalid ticket update request"})
+                return
+            current = next((ticket for ticket in tickets_from(directory) if ticket["id"] == ticket_id), None)
+            if not current:
+                self.send_json(404, {"error": "Ticket not found"})
+                return
+            if self.path == "/api/assignee":
+                name = value.strip()
+                if len(name) > 80 or not name.isprintable() or any(char in name for char in "#:"):
+                    self.send_json(400, {"error": "Invalid assignee name"})
+                    return
+                try:
+                    write_assignee(directory / f"{ticket_id}.md", expected, name)
+                except RuntimeError as error:
+                    self.send_json(409, {"error": str(error)})
+                    return
+                except (OSError, UnicodeError, ValueError) as error:
+                    self.send_json(400, {"error": str(error)})
+                    return
+                self.send_json(200, {"assignee": name})
+                return
+            status = value
+            if status not in ("open", "ready", "in_progress", "closed"):
+                self.send_json(400, {"error": "Invalid status"})
+                return
+            if current["status"] != expected:
+                self.send_json(409, {"error": "Ticket status changed; try again"})
+                return
+            if not ticket_command:
+                self.send_json(503, {"error": "Ticket command not found"})
+                return
+            try:
+                result = subprocess.run([ticket_command, "super", "status", ticket_id, status],
+                                        cwd=directory.parent, env={**os.environ, "TICKETS_DIR": str(directory)},
+                                        capture_output=True, text=True)
+            except OSError:
+                self.send_json(503, {"error": "Ticket command unavailable"})
+                return
+            if result.returncode:
+                self.send_json(400, {"error": result.stderr.strip() or "Status update failed"})
+                return
+            self.send_json(200, {"status": status})
 
         def do_GET(self):
             if self.path == "/api/tickets":
