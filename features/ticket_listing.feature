@@ -51,6 +51,8 @@ Feature: Ticket Listing
     Given a ticket exists with ID "ready-001" and title "Ready ticket"
     And a ticket exists with ID "ready-002" and title "Unblocked ticket"
     And a ticket exists with ID "ready-003" and title "Dependency"
+    And ticket "ready-001" has status "ready"
+    And ticket "ready-002" has status "ready"
     And ticket "ready-002" depends on "ready-003"
     And ticket "ready-003" has status "closed"
     When I run "ticket ready"
@@ -61,6 +63,8 @@ Feature: Ticket Listing
   Scenario: Ready excludes tickets with unclosed deps
     Given a ticket exists with ID "ready-001" and title "Blocked ticket"
     And a ticket exists with ID "ready-002" and title "Open dependency"
+    And ticket "ready-001" has status "ready"
+    And ticket "ready-002" has status "ready"
     And ticket "ready-001" depends on "ready-002"
     When I run "ticket ready"
     Then the command should succeed
@@ -70,6 +74,7 @@ Feature: Ticket Listing
   Scenario: Ready shows tickets when deps are closed
     Given a ticket exists with ID "ready-001" and title "Main ticket"
     And a ticket exists with ID "ready-002" and title "Closed dependency"
+    And ticket "ready-001" has status "ready"
     And ticket "ready-001" depends on "ready-002"
     And ticket "ready-002" has status "closed"
     When I run "ticket ready"
@@ -85,23 +90,55 @@ Feature: Ticket Listing
 
   Scenario: Ready shows priority in output
     Given a ticket exists with ID "ready-001" and title "Priority ticket"
+    And ticket "ready-001" has status "ready"
     When I run "ticket ready"
     Then the command should succeed
-    And the output should match pattern "ready-001\s+\[P2\]\[open\]\s+-\s+Priority ticket"
+    And the output should match pattern "ready-001\s+\[P2\]\[ready\]\s+-\s+Priority ticket"
 
   Scenario: Ready sorts by priority then ID
     Given a ticket exists with ID "ready-003" and title "Low priority" with priority 3
     And a ticket exists with ID "ready-001" and title "High priority" with priority 1
     And a ticket exists with ID "ready-002" and title "Also high priority" with priority 1
+    And ticket "ready-001" has status "ready"
+    And ticket "ready-002" has status "ready"
+    And ticket "ready-003" has status "ready"
     When I run "ticket ready"
     Then the command should succeed
     And the output line 1 should contain "ready-001"
     And the output line 2 should contain "ready-002"
     And the output line 3 should contain "ready-003"
 
+  Scenario: Frontier includes eligible open and ready tickets
+    Given a ticket exists with ID "front-001" and title "Needs refinement"
+    And a ticket exists with ID "front-002" and title "Can execute"
+    And ticket "front-002" has status "ready"
+    When I run "ticket frontier"
+    Then the command should succeed
+    And the output should contain "front-001"
+    And the output should contain "front-002"
+
+  Scenario: Ready excludes open tickets
+    Given a ticket exists with ID "front-001" and title "Needs refinement"
+    And a ticket exists with ID "front-002" and title "Can execute"
+    And ticket "front-002" has status "ready"
+    When I run "ticket ready"
+    Then the command should succeed
+    And the output should not contain "front-001"
+    And the output should contain "front-002"
+
+  Scenario: Frontier excludes blocked tickets
+    Given a ticket exists with ID "front-001" and title "Blocked"
+    And a ticket exists with ID "front-002" and title "Prerequisite"
+    And ticket "front-001" depends on "front-002"
+    When I run "ticket frontier"
+    Then the command should succeed
+    And the output should not contain "front-001"
+    And the output should contain "front-002"
+
   Scenario: Blocked shows tickets with unclosed deps
     Given a ticket exists with ID "block-001" and title "Blocked ticket"
     And a ticket exists with ID "block-002" and title "Blocker ticket"
+    And ticket "block-001" has status "ready"
     And ticket "block-001" depends on "block-002"
     When I run "ticket blocked"
     Then the command should succeed

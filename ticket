@@ -234,7 +234,7 @@ cmd_create() {
 }
 
 # Valid statuses
-VALID_STATUSES="open in_progress closed"
+VALID_STATUSES="open ready in_progress closed"
 
 validate_status() {
     local status="$1"
@@ -259,6 +259,31 @@ cmd_status() {
 
     local file
     file=$(ticket_path "$id") || return 1
+
+    if [[ "$status" == "in_progress" ]]; then
+        local current
+        current=$(yaml_field "$file" "status")
+        if [[ "$current" != "ready" && "$current" != "in_progress" ]]; then
+            echo "Error: refine $(basename "$file" .md) and set status to ready before starting" >&2
+            return 1
+        fi
+        local deps dep dep_file
+        local -a dep_ids=()
+        deps=$(yaml_field "$file" "deps")
+        deps=${deps#[}; deps=${deps%]}
+        if [[ -n "$deps" ]]; then
+            IFS=, read -ra dep_ids <<< "$deps"
+            for dep in "${dep_ids[@]}"; do
+                dep=${dep// /}
+                [[ -z "$dep" ]] && continue
+                dep_file=$(ticket_path "$dep") || return 1
+                if [[ "$(yaml_field "$dep_file" "status")" != "closed" ]]; then
+                    echo "Error: dependency '$dep' is not closed" >&2
+                    return 1
+                fi
+            done
+        fi
+    fi
 
     update_yaml_field "$file" "status" "$status"
     echo "Updated $(basename "$file" .md) -> $status"
@@ -651,9 +676,10 @@ cmd_dep() {
 }
 
 cmd_ready() {
-    local assignee_filter="" tag_filter=""
+    local assignee_filter="" tag_filter="" include_open=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --frontier) include_open=1; shift ;;
             -a) assignee_filter="$2"; shift 2 ;;
             --assignee=*) assignee_filter="${1#--assignee=}"; shift ;;
             -T) tag_filter="$2"; shift 2 ;;
@@ -662,7 +688,7 @@ cmd_ready() {
         esac
     done
 
-    awk -v assignee_filter="$assignee_filter" -v tag_filter="$tag_filter" '
+    awk -v assignee_filter="$assignee_filter" -v tag_filter="$tag_filter" -v include_open="$include_open" '
     BEGIN { FS=": "; in_front=0 }
     FNR==1 {
         if (prev_file) store()
@@ -697,10 +723,10 @@ cmd_ready() {
     }
     END {
         if (prev_file) store()
-        # Find ready tickets: active with all deps closed
+        # Find eligible tickets with all deps closed
         for (id in statuses) {
             status = statuses[id]
-            if (status != "open" && status != "in_progress") continue
+            if (status != "ready" && !(include_open && status == "open")) continue
             if (assignee_filter != "" && assignees[id] != assignee_filter) continue
             if (tag_filter != "" && !has_tag(all_tags[id], tag_filter)) continue
 
@@ -738,6 +764,10 @@ cmd_ready() {
         }
     }
     ' "$TICKETS_DIR"/*.md 2>/dev/null
+}
+
+cmd_frontier() {
+    cmd_ready --frontier "$@"
 }
 
 cmd_closed() {
@@ -834,10 +864,10 @@ cmd_blocked() {
     }
     END {
         if (prev_file) store()
-        # Find blocked tickets: active with at least one dep not closed
+        # Find unfinished tickets with at least one dep not closed
         for (id in statuses) {
             status = statuses[id]
-            if (status != "open" && status != "in_progress") continue
+            if (status != "open" && status != "ready" && status != "in_progress") continue
             if (assignee_filter != "" && assignees[id] != assignee_filter) continue
             if (tag_filter != "" && !has_tag(all_tags[id], tag_filter)) continue
 
@@ -1222,6 +1252,17 @@ cmd_add_note() {
     echo "Note added to $(basename "$file" .md)"
 }
 
+cmd_view() {
+    local source_dir
+    source_dir=$(python3 -c 'import os,sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")
+    if [[ ! -f "$source_dir/plugins/ticket-view" ]]; then
+        echo "Error: ticket-view plugin is not installed" >&2
+        return 1
+    fi
+    export TICKETS_DIR
+    exec python3 "$source_dir/plugins/ticket-view" "$@"
+}
+
 # List installed plugins with descriptions
 # Scripts: # tk-plugin: description (comment in first 10 lines)
 # Binaries: --tk-describe flag outputs description
@@ -1276,20 +1317,22 @@ Commands:
     --external-ref         External reference (e.g., gh-123, JIRA-456)
     --parent               Parent ticket ID
     --tags                 Comma-separated tags (e.g., --tags ui,backend,urgent)
-  start <id>               Set status to in_progress
+  start <id>               Start a ready ticket with closed dependencies
   close <id>               Set status to closed
   reopen <id>              Set status to open
-  status <id> <status>     Update status (open|in_progress|closed)
+  status <id> <status>     Update status (open|ready|in_progress|closed)
   dep <id> <dep-id>        Add dependency (id depends on dep-id)
   dep tree [--full] <id>   Show dependency tree (--full disables dedup)
-  dep cycle                Find dependency cycles in open tickets
+  dep cycle                Find dependency cycles in unfinished tickets
   undep <id> <dep-id>      Remove dependency
   link <id> <id> [id...]   Link tickets together (symmetric)
   unlink <id> <target-id>  Remove link between tickets
-  ready [-a X] [-T X]      List open/in-progress tickets with deps resolved
-  blocked [-a X] [-T X]    List open/in-progress tickets with unresolved deps
+  frontier [-a X] [-T X]   List open/ready tickets with deps resolved
+  ready [-a X] [-T X]      List ready tickets with deps resolved
+  blocked [-a X] [-T X]    List unfinished tickets with unresolved deps
   closed [--limit=N] [-a X] [-T X] List recently closed tickets (default 20, by mtime)
   show <id>                Display ticket
+  view [--port=N]          Open a live ticket graph
   add-note <id> [text]     Append timestamped note (or pipe via stdin)
   super <cmd> [args]       Bypass plugins, run built-in command directly
 EOF
@@ -1369,10 +1412,12 @@ case "${1:-help}" in
     undep)  shift; cmd_undep "$@" ;;
     link)   shift; cmd_link "$@" ;;
     unlink) shift; cmd_unlink "$@" ;;
+    frontier) shift; cmd_frontier "$@" ;;
     ready)  shift; cmd_ready "$@" ;;
     blocked) shift; cmd_blocked "$@" ;;
     closed) shift; cmd_closed "$@" ;;
     show)   shift; cmd_show "$@" ;;
+    view)   shift; cmd_view "$@" ;;
     add-note) shift; cmd_add_note "$@" ;;
     help|--help|-h) cmd_help ;;
     *)

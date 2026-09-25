@@ -3,9 +3,12 @@
 ## [Unreleased]
 
 ### Changed
+- `ready` now lists only refined tickets with closed dependencies; `start` requires both conditions
 - Extracted `edit`, `ls`, `query`, and `migrate-beads` commands to plugins (ticket-extras)
 
 ### Added
+- `view` command opens a live ticket graph with routed arrows, pan, zoom, filters, and an inspector
+- `ready` status and `frontier` command for two-pass ticket planning
 - Plugin system: executables named `tk-<cmd>` or `ticket-<cmd>` in PATH are invoked automatically
 - `super` command to bypass plugins and run built-in commands directly
 - `TICKETS_DIR` and `TK_SCRIPT` environment variables exported for plugins

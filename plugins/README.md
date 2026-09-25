@@ -2,6 +2,9 @@
 
 Official plugins that extend `tk` with additional commands.
 
+`ticket-view` serves a local, read-only graph for the current `.tickets/`
+folder. It requires Python 3. The source checkout also exposes it as `tk view`.
+
 ## Writing Plugins
 
 Plugins are executables named `tk-<cmd>` or `ticket-<cmd>` in `$PATH`. This repo uses the `ticket-` prefix for consistency.

@@ -38,6 +38,7 @@ cd ticket && ln -s "$PWD/ticket" ~/.local/bin/tk
 ## Requirements
 
 `tk` is a portable bash script requiring only coreutils, so it works out of the box on any POSIX system with bash installed. The `query` command requires `jq`. Uses `rg` (ripgrep) if available, falls back to `grep`.
+The `view` command requires Python 3 and a browser.
 
 ## Agent Setup
 
@@ -67,21 +68,23 @@ Commands:
     --external-ref         External reference (e.g., gh-123, JIRA-456)
     --parent               Parent ticket ID
     --tags                 Comma-separated tags (e.g., --tags ui,backend,urgent)
-  start <id>               Set status to in_progress
+  start <id>               Start a ready ticket with closed dependencies
   close <id>               Set status to closed
   reopen <id>              Set status to open
-  status <id> <status>     Update status (open|in_progress|closed)
+  status <id> <status>     Update status (open|ready|in_progress|closed)
   dep <id> <dep-id>        Add dependency (id depends on dep-id)
   dep tree [--full] <id>   Show dependency tree (--full disables dedup)
-  dep cycle                Find dependency cycles in open tickets
+  dep cycle                Find dependency cycles in unfinished tickets
   undep <id> <dep-id>      Remove dependency
   link <id> <id> [id...]   Link tickets together (symmetric)
   unlink <id> <target-id>  Remove link between tickets
   ls|list [--status=X] [-a X] [-T X]   List tickets
-  ready [-a X] [-T X]      List open/in-progress tickets with deps resolved
-  blocked [-a X] [-T X]    List open/in-progress tickets with unresolved deps
+  frontier [-a X] [-T X]   List open/ready tickets with deps resolved
+  ready [-a X] [-T X]      List ready tickets with deps resolved
+  blocked [-a X] [-T X]    List unfinished tickets with unresolved deps
   closed [--limit=N] [-a X] [-T X] List recently closed tickets (default 20, by mtime)
   show <id>                Display ticket
+  view [--port=N]          Open a live ticket graph
   add-note <id> [text]     Append timestamped note (or pipe via stdin)
   super <cmd> [args]       Bypass plugins, run built-in command directly
 
@@ -94,6 +97,34 @@ Bundled plugins (ticket-extras):
 Searches parent directories for .tickets/ (override with TICKETS_DIR env var)
 Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
 ```
+
+New tickets start as `open`: the outcome and known dependencies are recorded,
+but implementation detail can still change. Refine an eligible `open` ticket
+against the current repository, then run `tk status <id> ready`. `tk frontier`
+shows eligible `open` and `ready` tickets. `tk ready` shows only tickets that
+can start now. A ticket with an unfinished dependency appears in `tk blocked`
+regardless of whether its status is `open` or `ready`. `tk start` requires
+`ready` status and closed dependencies.
+
+`tk view` opens a local, read-only graph for the current project's `.tickets/`
+folder. Dependencies point from left to right. When the graph is much wider
+than the window, later columns wrap into stacked bands below the first. Epics
+appear in the color legend with their visible ticket counts; their child
+tickets appear as nodes grouped by epic within each column. Closed tickets are
+hidden by default. Show closed tickets, then show closed epics, to reveal older work.
+Click an epic name to filter its tickets; click it again to clear the filter.
+The epic filter is disabled when only one epic is available.
+
+The graph fits itself on first load. Drag to pan. Use the mouse wheel or the
++/- buttons to zoom. Press `F` or click Fit to show all visible nodes. Select a
+ticket to highlight its dependency edges and read styled Markdown and front
+matter. Dependency, link, and parent pills open their tickets. Click the ID
+button to copy it, or use the inspector button to copy an execution prompt.
+Drag the inspector's left edge to resize it; the width is remembered, and a
+double-click resets it.
+The page checks for changes each second and keeps node positions stable until
+dependencies or epics change, or until a window resize changes the number of
+bands. Use `tk view --no-open` to print the URL without opening a browser.
 
 ## Plugins
 

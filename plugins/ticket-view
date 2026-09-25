@@ -1,0 +1,1014 @@
+#!/usr/bin/env python3
+# tk-plugin: Open a live dependency graph for tickets
+# tk-plugin-version: 1.0.0
+
+"""Local, read-only ticket graph. Python 3 standard library only."""
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import webbrowser
+
+
+PAGE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ticket view</title>
+<style>
+  :root {
+    --ink: #17212c; --ink-2: #4a5868; --ink-3: #6b7888; --line: #dde2e8; --line-2: #c7cfd8;
+    --canvas: #f3f5f7; --surface: #ffffff; --sunken: #f6f8fa; --accent: #1f63b8; --accent-soft: #e8f0fa;
+    --edge: #b3bdc9; --danger: #b42318;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--canvas);
+    accent-color: var(--accent);
+  }
+  * { box-sizing: border-box; }
+  ::selection { background: #cfe0f5; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--canvas); }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-height: 48px; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .brand { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  h1 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+  .app-name { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+  #count { padding: 2px 8px; border-radius: 999px; background: var(--sunken); border: 1px solid var(--line); color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #count:empty, #error:empty { display: none; }
+  #error { color: var(--danger); font-weight: 550; }
+  #filters { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; }
+  #filters label { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px; white-space: nowrap; cursor: pointer; color: var(--ink-2); font-size: 12px; font-weight: 550; }
+  #filters label:hover { background: var(--sunken); color: var(--ink); }
+  #filters label:has(input:checked) { border-color: #a9c4e6; background: var(--accent-soft); color: var(--accent); }
+  #filters label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #filters input { margin: 0; }
+  main { --inspector-w: 400px; display: grid; grid-template-columns: minmax(0, 1fr) 0 min(var(--inspector-w), calc(100vw - 320px)); flex: 1; min-height: 0; }
+  #resizer { position: relative; z-index: 3; cursor: col-resize; touch-action: none; }
+  #resizer::before { content: ""; position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; }
+  #resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: var(--accent); opacity: 0; transition: opacity .15s; }
+  #resizer:hover::after, #resizer:focus-visible::after, #resizer.dragging::after { opacity: 1; }
+  #resizer:focus-visible { outline: none; }
+  body.resizing { cursor: col-resize; user-select: none; }
+  #left { min-width: 0; display: flex; flex-direction: column; }
+  #legend { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--surface); color: var(--ink-3); }
+  #legend:not(:has(button)) { padding: 9px 16px; }
+  .legend-item { display: inline-flex; align-items: center; gap: 6px; max-width: 320px; padding: 3px 8px; border: 1px solid transparent; border-radius: 999px; background: none; white-space: nowrap; color: var(--ink-2); cursor: pointer; }
+  .legend-item:hover:not(:disabled) { background: var(--sunken); border-color: var(--line); }
+  .legend-item[aria-pressed="true"] { border-color: color-mix(in srgb, var(--color) 45%, white); background: color-mix(in srgb, var(--color) 9%, white); color: var(--ink); }
+  .legend-item:disabled { cursor: default; }
+  .legend-name { overflow: hidden; text-overflow: ellipsis; }
+  .legend-count { color: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color); flex: none; }
+  #viewport { position: relative; overflow: hidden; flex: 1; min-height: 0; cursor: grab; touch-action: none; }
+  #viewport, #viewport * { user-select: none; -webkit-user-select: none; }
+  #viewport.dragging { cursor: grabbing; }
+  #graph { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  #controls { position: absolute; z-index: 2; bottom: 12px; right: 12px; display: flex; align-items: center; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 2px 8px #17212c14; }
+  #controls button { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 28px; padding: 0 8px; border: 0; border-radius: 5px; background: none; color: var(--ink-2); cursor: pointer; }
+  #controls button:hover { background: var(--sunken); color: var(--ink); }
+  #controls svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; fill: none; }
+  #zoom-level { min-width: 42px; text-align: center; color: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+  kbd { padding: 0 4px; border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 3px; font: 10px/1.5 var(--mono); color: var(--ink-3); }
+  #fit { gap: 5px; font-size: 12px; }
+  #edges { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+  #edges > path { fill: none; stroke: var(--edge); stroke-width: var(--w, 1.5px); }
+  #edges > path.related { stroke: var(--accent); stroke-width: calc(var(--w, 1.5px) + 0.75px); }
+  #edges.focused > path:not(.related) { stroke: #cdd4dc; }
+  .node { position: absolute; display: flex; flex-direction: column; gap: 3px; width: 240px; height: 104px; padding: 8px 11px 9px;
+    border: 1px solid color-mix(in srgb, var(--color) 40%, var(--line)); border-radius: 7px; background: var(--surface);
+    text-align: left; box-shadow: 0 1px 2px #17212c0f; cursor: pointer; }
+  .node[data-status="in_progress"] { background: #fdf0de; border-color: #e3a55a; }
+  .node:hover { border-color: color-mix(in srgb, var(--color) 70%, var(--ink-3)); box-shadow: 0 2px 8px #17212c1a; }
+  .node[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 4px 12px #17212c1f; }
+  .node.related { border-color: var(--accent); }
+  .node[data-status="closed"] { background: var(--sunken); }
+  .node[data-status="closed"] .node-title { color: var(--ink-2); font-weight: 550; }
+  .node-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: var(--ink-3); white-space: nowrap; }
+  .node-id { font-family: var(--mono); font-size: 11.5px; }
+  .node-priority { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .node-title { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; font-weight: 620; font-size: 14px; line-height: 1.3; color: var(--ink); }
+  .status { --status: #7b8794; display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); white-space: nowrap; }
+  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--status); flex: none; }
+  .status[data-status="ready"] { --status: #1f63b8; }
+  .status[data-status="in_progress"] { --status: #c26a06; color: #8a4b04; }
+  .status[data-status="in_progress"]::before, .status[data-status="closed"]::before { background: var(--status); }
+  .status[data-status="closed"] { --status: #a3adb8; color: var(--ink-3); }
+  .empty-graph { position: absolute; top: 24px; left: 24px; margin: 0; color: var(--ink-3); white-space: nowrap; }
+  aside { border-left: 1px solid var(--line); background: var(--surface); overflow: auto; container-type: inline-size; }
+  #empty { padding: 20px; color: var(--ink-3); }
+  #empty p { margin: 0 0 12px; color: var(--ink-2); }
+  #empty ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+  #details { padding: 16px 22px 32px; }
+  aside h2 { margin: 0; font-size: 17px; font-weight: 650; line-height: 1.3; letter-spacing: -0.01em; text-wrap: balance; }
+  .summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 6px 0 12px; color: var(--ink-2); font-size: 12px; }
+  .summary:empty { display: none; }
+  .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .actions button { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); cursor: pointer; }
+  .actions button:hover { background: var(--sunken); }
+  #detail-id { font-family: var(--mono); font-size: 12px; }
+  #copy { border-color: var(--accent); background: var(--accent); color: white; font-weight: 550; }
+  #copy:hover { background: #18559f; }
+  dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 14px 0 0; font-size: 12px; }
+  dl:empty { display: none; }
+  dt { color: var(--ink-3); line-height: 22px; } dd { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; min-height: 22px; overflow-wrap: anywhere; }
+  #body { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .pill { position: relative; display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; background: var(--sunken); color: var(--ink-2); font-size: 12px; }
+  button.pill { cursor: pointer; color: var(--accent); }
+  button.pill:hover { background: var(--accent-soft); border-color: #a9c4e6; }
+  .pill-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: max(160px, calc(100cqw - 170px)); }
+  .tooltip { display: none; position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 5; width: max-content; max-width: min(320px, 75vw); padding: 6px 8px; border-radius: 5px; background: #1c2735; color: white; font: 12px/1.4 system-ui, sans-serif; white-space: normal; overflow-wrap: anywhere; box-shadow: 0 4px 12px #17212c33; pointer-events: none; }
+  .pill:hover .tooltip, .pill:focus-visible .tooltip { display: block; }
+  .markdown { overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; max-width: 72ch; }
+  .markdown > :first-child { margin-top: 0; }
+  .markdown h3, .markdown h4, .markdown h5, .markdown h6 { margin: 20px 0 6px; line-height: 1.3; color: var(--ink); }
+  .markdown h3 { font-size: 15px; } .markdown h4, .markdown h5, .markdown h6 { font-size: 14px; }
+  .markdown p { margin: 0 0 10px; }
+  .markdown ul, .markdown ol { margin: 0 0 12px; padding-left: 20px; }
+  .markdown li { margin: 3px 0; }
+  .markdown li::marker { color: var(--ink-3); }
+  .markdown code { padding: 1px 4px; border-radius: 3px; background: #eef1f4; font: 12.5px/1.5 var(--mono); }
+  .markdown pre { margin: 8px 0 14px; padding: 10px; border-radius: 6px; background: var(--sunken); border: 1px solid var(--line); overflow: auto; }
+  .markdown pre code { padding: 0; background: none; white-space: pre; }
+  .markdown blockquote { margin: 10px 0; padding-left: 12px; border-left: 2px solid var(--line-2); color: var(--ink-2); }
+  .markdown a { color: var(--accent); text-underline-offset: 2px; }
+  @media (max-width: 1100px) { main { --inspector-w: 340px; } }
+  @media (max-width: 800px) {
+    body { height: auto; min-height: 100vh; }
+    header { padding: 8px 12px; }
+    #filters { margin-left: 0; width: 100%; }
+    main { grid-template-columns: 1fr; }
+    #resizer { display: none; }
+    #legend { flex-wrap: nowrap; overflow-x: auto; padding: 6px 8px; scrollbar-width: thin; }
+    #viewport { flex: none; height: 58vh; }
+    aside { border-left: 0; border-top: 1px solid var(--line); min-height: 40vh; }
+    #details { padding: 16px 16px 28px; }
+    #controls kbd { display: none; }
+  }
+</style>
+</head>
+<body>
+<header><div class="brand"><h1 id="project">Ticket view</h1><span class="app-name" hidden>Ticket view</span></div><span id="count"></span><span id="error" role="status"></span><div id="filters">
+  <label><input id="show-closed" type="checkbox"> Show closed tickets</label>
+  <label id="closed-epic-label" hidden><input id="show-closed-epics" type="checkbox"> Show closed epics</label>
+</div></header>
+<main>
+  <div id="left"><div id="legend"></div><div id="viewport">
+    <div id="controls" aria-label="Graph controls">
+      <button id="zoom-out" type="button" aria-label="Zoom out"><svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg></button>
+      <span id="zoom-level" aria-live="off">100%</span>
+      <button id="zoom-in" type="button" aria-label="Zoom in"><svg viewBox="0 0 16 16"><path d="M3 8h10M8 3v10"/></svg></button>
+      <button id="fit" type="button" aria-label="Fit graph (F)">Fit<kbd>F</kbd></button>
+    </div>
+    <div id="graph"><svg id="edges" aria-hidden="true"></svg></div>
+  </div></div>
+  <div id="resizer" role="separator" aria-orientation="vertical" aria-label="Resize inspector" tabindex="0" title="Drag to resize, double-click to reset"></div>
+  <aside id="inspector"><div id="empty"><p>Select a ticket to read it here.</p><ul>
+    <li>Drag to pan, scroll to zoom</li><li><kbd>F</kbd> fits every visible ticket</li><li>Click an epic above to filter its tickets</li>
+  </ul></div><div id="details" hidden>
+    <h2 id="detail-title"></h2>
+    <div id="summary" class="summary"></div>
+    <div class="actions"><button id="detail-id" type="button" aria-label="Copy ticket ID"><span class="label"></span></button><button id="copy" type="button"><span class="label">Copy execution prompt</span></button></div>
+    <dl id="metadata"></dl>
+    <div id="body" class="markdown"></div>
+  </div></aside>
+</main>
+<script>
+const graph = document.querySelector('#graph');
+const edges = document.querySelector('#edges');
+const legend = document.querySelector('#legend');
+const viewport = document.querySelector('#viewport');
+const palette = ['#2563eb', '#b45309', '#0f766e', '#9333ea', '#be123c', '#4d7c0f', '#0891b2', '#c2410c', '#db2777', '#a16207'];
+const colors = new Map();
+let tickets = [], selected = null, structure = '', etag = '', project = '';
+let showClosed = false, showClosedEpics = false, epicFilter = null, promptText = '';
+let zoom = 1, panX = 0, panY = 0, drag = null, suppressClick = false, fitted = false;
+const NODE_W = 240, NODE_H = 104, ROW_PITCH = 132, MIN_GAP = 64;
+let rowCounts = [], bandCount = 1;
+const bandOf = (column, bands, columns) => Math.floor(column * bands / columns);
+// Wrap dependency columns into evenly sized, stacked bands when a single band
+// would be far wider than the viewport. Returns the number of bands.
+function chooseBandCount(counts) {
+  const target = viewport.clientWidth / viewport.clientHeight;
+  if (!counts.length || !(target > 0)) return 1;
+  const score = bands => {
+    const widths = new Array(bands).fill(0), heights = new Array(bands).fill(0);
+    counts.forEach((rows, column) => {
+      const b = bandOf(column, bands, counts.length);
+      widths[b] += NODE_W + MIN_GAP;
+      heights[b] = Math.max(heights[b], rows * ROW_PITCH);
+    });
+    const height = heights.reduce((sum, h) => sum + h + 72, 0);
+    return Math.abs(Math.log((Math.max(...widths) + 72) / height / target));
+  };
+  if (score(1) < Math.log(1.35)) return 1;
+  let best = 1;
+  for (let bands = 2; bands <= counts.length; bands++) if (score(bands) < score(best) - 0.01) best = bands;
+  return best;
+}
+const statusLabel = status => ({ in_progress: 'In progress' })[status] || status.charAt(0).toUpperCase() + status.slice(1);
+function transform() {
+  graph.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  document.querySelector('#zoom-level').textContent = Math.round(zoom * 100) + '%';
+}
+function zoomAt(factor, x, y) {
+  const next = Math.max(0.04, Math.min(3, zoom * factor));
+  panX = x - (x - panX) * next / zoom;
+  panY = y - (y - panY) * next / zoom;
+  zoom = next;
+  transform();
+}
+function fit() {
+  const width = graph.offsetWidth, height = graph.offsetHeight;
+  if (!width || !height || !viewport.clientWidth || !viewport.clientHeight) return;
+  zoom = Math.min(1, (viewport.clientWidth - 32) / width, (viewport.clientHeight - 32) / height);
+  panX = (viewport.clientWidth - width * zoom) / 2;
+  panY = (viewport.clientHeight - height * zoom) / 2;
+  transform();
+}
+viewport.addEventListener('wheel', event => {
+  event.preventDefault();
+  const rect = viewport.getBoundingClientRect();
+  zoomAt(Math.exp(-event.deltaY * 0.001), event.clientX - rect.left, event.clientY - rect.top);
+}, { passive: false });
+viewport.addEventListener('pointerdown', event => {
+  if (event.button !== 0 || event.target.closest('#controls')) return;
+  drag = { id: event.pointerId, x: event.clientX, y: event.clientY, panX, panY, moved: false };
+});
+viewport.addEventListener('pointermove', event => {
+  if (!drag || event.pointerId !== drag.id) return;
+  const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+  if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+  if (!drag.moved) {
+    drag.moved = true;
+    viewport.setPointerCapture(event.pointerId);
+    viewport.classList.add('dragging');
+  }
+  panX = drag.panX + dx;
+  panY = drag.panY + dy;
+  transform();
+});
+function endDrag(event) {
+  if (!drag || event.pointerId !== drag.id) return;
+  if (drag.moved) {
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 0);
+  }
+  if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+  viewport.classList.remove('dragging');
+  drag = null;
+}
+viewport.addEventListener('pointerup', endDrag);
+viewport.addEventListener('pointercancel', endDrag);
+viewport.addEventListener('click', event => {
+  if (!suppressClick) return;
+  event.preventDefault();
+  event.stopPropagation();
+  suppressClick = false;
+}, true);
+document.querySelector('#fit').addEventListener('click', fit);
+const main = document.querySelector('main'), resizer = document.querySelector('#resizer');
+function setInspectorWidth(width, save) {
+  if (width == null) main.style.removeProperty('--inspector-w');
+  else main.style.setProperty('--inspector-w', Math.round(Math.max(280, Math.min(width, innerWidth - 320))) + 'px');
+  if (!save) return;
+  try {
+    if (width == null) localStorage.removeItem('tk-view-inspector-width');
+    else localStorage.setItem('tk-view-inspector-width', parseInt(main.style.getPropertyValue('--inspector-w')));
+  } catch {}
+}
+try { const stored = Number(localStorage.getItem('tk-view-inspector-width')); if (stored) setInspectorWidth(stored); } catch {}
+const inspectorWidth = () => document.querySelector('aside').getBoundingClientRect().width;
+resizer.addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  resizer.setPointerCapture(event.pointerId);
+  resizer.classList.add('dragging');
+  document.body.classList.add('resizing');
+});
+resizer.addEventListener('pointermove', event => {
+  if (resizer.hasPointerCapture(event.pointerId)) setInspectorWidth(main.getBoundingClientRect().right - event.clientX);
+});
+resizer.addEventListener('pointerup', event => {
+  if (!resizer.hasPointerCapture(event.pointerId)) return;
+  resizer.releasePointerCapture(event.pointerId);
+  resizer.classList.remove('dragging');
+  document.body.classList.remove('resizing');
+  setInspectorWidth(inspectorWidth(), true);
+  relayoutForViewport();
+});
+resizer.addEventListener('dblclick', () => setInspectorWidth(null, true));
+resizer.addEventListener('keydown', event => {
+  const step = { ArrowLeft: 24, ArrowRight: -24 }[event.key];
+  if (!step) return;
+  event.preventDefault();
+  setInspectorWidth(inspectorWidth() + step, true);
+});
+document.querySelector('#zoom-in').addEventListener('click', () => zoomAt(1.25, viewport.clientWidth / 2, viewport.clientHeight / 2));
+document.querySelector('#zoom-out').addEventListener('click', () => zoomAt(0.8, viewport.clientWidth / 2, viewport.clientHeight / 2));
+document.addEventListener('keydown', event => {
+  if (event.key.toLowerCase() !== 'f' || event.altKey || event.ctrlKey || event.metaKey || event.target.closest('input, textarea, [contenteditable]')) return;
+  event.preventDefault();
+  fit();
+});
+const byId = () => new Map(tickets.map(t => [t.id, t]));
+function availableTickets() {
+  const map = byId();
+  return tickets.filter(t => t.type !== 'epic'
+    && (showClosed || t.status !== 'closed')
+    && (showClosedEpics || map.get(t.parent)?.status !== 'closed'));
+}
+function visibleTickets() {
+  return availableTickets().filter(t => !epicFilter || t.parent === epicFilter);
+}
+const nodeId = id => 'ticket-' + CSS.escape(id);
+function group(t) { return t.parent || ''; }
+function color(key) {
+  if (!key) return '#8995a4';
+  if (!colors.has(key)) colors.set(key, palette[colors.size % palette.length]);
+  return colors.get(key);
+}
+function updateLegend() {
+  const map = byId();
+  const counts = new Map();
+  for (const t of availableTickets()) counts.set(group(t), (counts.get(group(t)) || 0) + 1);
+  const groups = [...counts.keys()].filter(Boolean).sort();
+  if (groups.length < 2 || (epicFilter && !groups.includes(epicFilter))) epicFilter = null;
+  legend.replaceChildren();
+  for (const id of groups) {
+    const item = document.createElement('button');
+    item.className = 'legend-item';
+    item.type = 'button';
+    item.disabled = groups.length < 2;
+    item.setAttribute('aria-pressed', String(epicFilter === id));
+    item.addEventListener('click', () => { epicFilter = epicFilter === id ? null : id; render(); });
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.setProperty('--color', color(id));
+    const name = document.createElement('span');
+    name.className = 'legend-name';
+    name.textContent = map.get(id)?.title || id;
+    const count = document.createElement('span');
+    count.className = 'legend-count';
+    count.textContent = counts.get(id);
+    item.title = (map.get(id)?.title || id) + ' (' + id + ')';
+    item.append(dot, name, count);
+    legend.append(item);
+  }
+  if (!groups.length) legend.textContent = 'No epics';
+}
+function layout() {
+  const visible = visibleTickets().sort((a, b) => group(a).localeCompare(group(b)) || a.id.localeCompare(b.id));
+  const map = new Map(visible.map(t => [t.id, t]));
+  const levels = new Map(), visiting = new Set();
+  function level(id) {
+    if (levels.has(id)) return levels.get(id);
+    if (visiting.has(id)) return 0;
+    visiting.add(id);
+    const deps = (map.get(id)?.deps || []).filter(dep => map.has(dep));
+    const value = deps.length ? Math.max(...deps.map(level)) + 1 : 0;
+    visiting.delete(id);
+    levels.set(id, value);
+    return value;
+  }
+  for (const t of visible) level(t.id);
+  const links = visible.flatMap(t => t.deps.filter(dep => map.has(dep))
+    .map(dep => ({ from: dep, to: t.id, start: levels.get(dep), end: levels.get(t.id) })))
+    .filter(link => link.start < link.end)
+    .sort((a, b) => (a.from + ':' + a.to).localeCompare(b.from + ':' + b.to));
+  const incoming = new Map(), outgoing = new Map(), channels = new Map();
+  for (const link of links) {
+    if (!incoming.has(link.to)) incoming.set(link.to, []);
+    if (!outgoing.has(link.from)) outgoing.set(link.from, []);
+    incoming.get(link.to).push(link);
+    outgoing.get(link.from).push(link);
+  }
+  const maxLevel = Math.max(0, ...levels.values());
+  rowCounts = new Array(maxLevel + 1).fill(0);
+  for (const t of visible) rowCounts[levels.get(t.id)]++;
+  bandCount = chooseBandCount(rowCounts);
+  const band = column => bandOf(column, bandCount, maxLevel + 1);
+  const lastBand = band(maxLevel);
+  // Links between bands leave through the gap right of their source column,
+  // run along the corridor under the source band, and enter through the gap
+  // left of their target column. A target in a band's first column, or a link
+  // that skips a band, uses a lane in the shared left margin instead.
+  // Links from one band into the same target share a bundle: one corridor
+  // lane, one entry lane, and one port. Only the bundle's lead takes lanes.
+  const margin = [], corridors = new Map(), bundles = new Map();
+  for (const link of links) {
+    const from = band(link.start), to = band(link.end);
+    link.cross = from !== to;
+    link.lead = link;
+    if (!link.cross) continue;
+    const key = link.to + '|' + from;
+    if (bundles.has(key)) {
+      link.lead = bundles.get(key)[0];
+      Object.assign(link, { margin: link.lead.margin, direct: link.lead.direct });
+      bundles.get(key).push(link);
+      continue;
+    }
+    bundles.set(key, link.bundle = [link]);
+    link.margin = band(link.end - 1) !== to || to > from + 1;
+    link.direct = band(link.end - 1) === to;
+    if (link.margin) margin.push(link);
+    for (const gap of [from, ...(to > from + 1 && link.direct ? [to - 1] : [])]) {
+      if (!corridors.has(gap)) corridors.set(gap, []);
+      corridors.get(gap).push(link);
+    }
+  }
+  for (const link of links) {
+    const gaps = !link.cross ? (link.end === link.start + 1 ? [link.start] : [link.start, link.end - 1])
+      : link.direct && link.lead === link ? [link.start, link.end - 1] : [link.start];
+    for (const gap of gaps) {
+      if (!channels.has(gap)) channels.set(gap, []);
+      channels.get(gap).push(link);
+    }
+  }
+  margin.sort((a, b) => a.start - b.start || a.end - b.end);
+  for (const [id, list] of incoming) incoming.set(id, list.filter(link => link.lead === link));
+  const left = 36 + (margin.length ? margin.length * 10 + 20 : 0);
+  const columnX = [], gapWidths = [];
+  for (let column = 0; column <= maxLevel; column++) {
+    columnX.push(column && band(column) === band(column - 1) ? columnX[column - 1] + NODE_W + gapWidths[column - 1] : left);
+    gapWidths.push(Math.max(MIN_GAP, ((channels.get(column)?.length || 0) + 1) * 10));
+  }
+  const rowGap = ROW_PITCH - NODE_H;
+  const bandRows = [], bandTop = [36];
+  for (let column = 0; column <= maxLevel; column++) bandRows[band(column)] = Math.max(bandRows[band(column)] || 0, rowCounts[column]);
+  for (let b = 0; b < lastBand; b++) bandTop.push(bandTop[b] + bandRows[b] * ROW_PITCH - rowGap + 64 + (corridors.get(b)?.length || 0) * 6);
+  const rows = new Map(), positions = new Map();
+  for (const t of visible) {
+    const column = levels.get(t.id);
+    const row = rows.get(column) || 0;
+    rows.set(column, row + 1);
+    positions.set(t.id, { x: columnX[column], y: bandTop[band(column)] + row * ROW_PITCH });
+  }
+  const width = Math.max(400, ...[...positions.values()].map(p => p.x + NODE_W + 36));
+  const nodeBottom = Math.max(0, ...[...positions.values()].map(p => p.y + NODE_H));
+  const height = Math.max(250, nodeBottom + 36);
+  graph.style.width = width + 'px';
+  graph.style.height = height + 'px';
+  edges.setAttribute('width', width);
+  edges.setAttribute('height', height);
+  edges.replaceChildren();
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+  marker.setAttribute('id', 'arrow');
+  marker.setAttribute('viewBox', '0 0 10 10');
+  marker.setAttribute('refX', '9');
+  marker.setAttribute('refY', '5');
+  marker.setAttribute('markerUnits', 'userSpaceOnUse');
+  marker.setAttribute('markerWidth', '10');
+  marker.setAttribute('markerHeight', '10');
+  marker.setAttribute('orient', 'auto');
+  const tip = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  tip.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
+  tip.setAttribute('fill', 'context-stroke');
+  marker.append(tip);
+  defs.append(marker);
+  edges.append(defs);
+  graph.querySelectorAll('.node, .empty-graph').forEach(n => n.remove());
+  for (const t of visible) {
+    const p = positions.get(t.id);
+    const button = document.createElement('button');
+    button.className = 'node';
+    button.id = nodeId(t.id);
+    button.style.left = p.x + 'px';
+    button.style.top = p.y + 'px';
+    button.addEventListener('click', () => { selected = t.id; updateSelection(); });
+    graph.append(button);
+  }
+  const pos = id => positions.get(id);
+  for (const list of outgoing.values()) list.sort((a, b) => pos(a.to).y - pos(b.to).y || pos(a.to).x - pos(b.to).x);
+  for (const list of incoming.values()) list.sort((a, b) => pos(a.from).y - pos(b.from).y || pos(a.from).x - pos(b.from).x);
+  function port(list, link, top, outgoingPort) {
+    const half = NODE_H / 2;
+    return top + (outgoingPort ? 6 : half + 4) + (list.indexOf(link) + 1) * (half - 10) / (list.length + 1);
+  }
+  function channel(gap, link) {
+    const list = channels.get(gap);
+    return columnX[gap] + NODE_W + (list.indexOf(link) + 1) * gapWidths[gap] / (list.length + 1);
+  }
+  // A long link inside a band crosses intermediate columns. It stays level
+  // with its source or target port when no node is in the way; otherwise it
+  // runs through the nearest gap between rows, which stays clear in every column.
+  function clear(y, link) {
+    for (let column = link.start + 1; column < link.end; column++) {
+      for (let row = 0; row < (rows.get(column) || 0); row++) {
+        const top = bandTop[band(column)] + row * ROW_PITCH;
+        if (y > top - 6 && y < top + NODE_H + 6) return false;
+      }
+    }
+    return true;
+  }
+  const bandBottom = b => bandTop[b] + bandRows[b] * ROW_PITCH - rowGap;
+  const lanes = new Map();
+  for (const link of links) {
+    if (link.cross || link.end === link.start + 1) continue;
+    const y1 = port(outgoing.get(link.from), link, pos(link.from).y, true);
+    const y2 = port(incoming.get(link.to), link, pos(link.to).y, false);
+    if (clear(y1, link)) link.level = 'source';
+    else if (clear(y2, link)) link.level = 'target';
+    else {
+      const top = bandTop[band(link.start)], lastGap = bandRows[band(link.start)];
+      const cost = gap => {
+        const y = top + gap * ROW_PITCH - rowGap / 2;
+        return Math.abs(y1 - y) + Math.abs(y - y2) + Math.abs(y - (y1 + y2) / 2) / 100;
+      };
+      let best = 0;
+      for (let gap = 1; gap <= lastGap; gap++) if (cost(gap) < cost(best)) best = gap;
+      link.gapY = top + best * ROW_PITCH - rowGap / 2;
+      const key = band(link.start) + ':' + best;
+      if (!lanes.has(key)) lanes.set(key, []);
+      link.lane = lanes.get(key);
+      link.lane.push(link);
+    }
+  }
+  function points(link) {
+    const a = pos(link.from), b = pos(link.to);
+    const x1 = a.x + NODE_W, y1 = port(outgoing.get(link.from), link, a.y, true);
+    const x2 = b.x, y2 = port(incoming.get(link.to), link.lead, b.y, false);
+    const exit = channel(link.start, link), start = [[x1, y1]], finish = [[x2, y2]];
+    if (link.cross) {
+      const from = band(link.start), to = band(link.end), lead = link.lead;
+      const corridor = b => bandBottom(b) + 28 + corridors.get(b).indexOf(lead) * 6;
+      const below = corridor(from), marginX = 36 + 12 + margin.indexOf(lead) * 10;
+      if (!link.direct) return [...start, [exit, y1], [exit, below], [marginX, below], [marginX, y2], ...finish];
+      const entry = channel(link.end - 1, lead);
+      if (!link.margin) return [...start, [exit, y1], [exit, below], [entry, below], [entry, y2], ...finish];
+      const above = corridor(to - 1);
+      return [...start, [exit, y1], [exit, below], [marginX, below], [marginX, above], [entry, above], [entry, y2], ...finish];
+    }
+    if (link.end === link.start + 1 || link.level === 'target') return [...start, [exit, y1], [exit, y2], ...finish];
+    const entry = channel(link.end - 1, link);
+    if (link.level === 'source') return [...start, [entry, y1], [entry, y2], ...finish];
+    const step = Math.min(6, rowGap / (link.lane.length + 1));
+    const y = link.gapY + (link.lane.indexOf(link) - (link.lane.length - 1) / 2) * step;
+    return [...start, [exit, y1], [exit, y], [entry, y], [entry, y2], ...finish];
+  }
+  // Order each gap's lanes so paired links cross as little as possible: a link
+  // entering from the left at yIn crosses a lane to its left when yIn falls
+  // inside that lane's vertical span, and leaves right at yOut likewise.
+  let paths = new Map(links.map(link => [link, points(link)]));
+  for (const [gap, list] of channels) {
+    const span = new Map(list.map(link => {
+      const x = channel(gap, link), pts = paths.get(link);
+      const i = pts.findIndex((pt, index) => pt[0] === x && pts[index + 1]?.[0] === x);
+      return [link, i < 0 ? [0, 0] : [pts[i][1], pts[i + 1][1]]];
+    }));
+    const inside = (y, [a, b]) => y > Math.min(a, b) && y < Math.max(a, b);
+    const cost = (a, b) => inside(span.get(b)[0], span.get(a)) + inside(span.get(a)[1], span.get(b));
+    list.sort((a, b) => cost(a, b) - cost(b, a));
+  }
+  // A few passes of neighbour swaps then keep any change to a port or lane
+  // order that reduces the number of edge crossings.
+  paths = new Map(links.map(link => [link, bounds(points(link))]));
+  function bounds(pts) {
+    const xs = pts.map(pt => pt[0]), ys = pts.map(pt => pt[1]);
+    pts.box = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    return pts;
+  }
+  function crossings(p, q) {
+    const [a1, a2, a3, a4] = p.box, [b1, b2, b3, b4] = q.box;
+    if (a2 < b1 || b2 < a1 || a4 < b3 || b4 < a3) return 0;
+    let count = 0;
+    for (let i = 1; i < p.length; i++) for (let j = 1; j < q.length; j++) {
+      let [a, b] = [p[i - 1], p[i]], [c, d] = [q[j - 1], q[j]];
+      if (a[1] !== b[1]) [a, b, c, d] = [c, d, a, b];
+      if (a[1] !== b[1] || c[0] !== d[0]) continue;
+      if (c[0] > Math.min(a[0], b[0]) && c[0] < Math.max(a[0], b[0])
+        && a[1] > Math.min(c[1], d[1]) && a[1] < Math.max(c[1], d[1])) count++;
+    }
+    return count;
+  }
+  const members = link => link.bundle || [link];
+  function crossingsOf(set) {
+    let count = 0;
+    const list = [...set];
+    list.forEach((link, index) => {
+      for (const other of links) if (!set.has(other)) count += crossings(paths.get(link), paths.get(other));
+      for (const other of list.slice(index + 1)) count += crossings(paths.get(link), paths.get(other));
+    });
+    return count;
+  }
+  const orders = [...outgoing.values(), ...incoming.values(), ...channels.values(), ...corridors.values(), ...lanes.values(), margin];
+  for (let pass = 0; pass < 4; pass++) {
+    let improved = false;
+    for (const list of orders) for (let i = 0; i + 1 < list.length; i++) {
+      const a = list[i], b = list[i + 1], moved = new Set([...members(a), ...members(b)]);
+      const old = new Map([...moved].map(link => [link, paths.get(link)]));
+      const before = crossingsOf(moved);
+      [list[i], list[i + 1]] = [b, a];
+      for (const link of moved) paths.set(link, bounds(points(link)));
+      if (crossingsOf(moved) < before) improved = true;
+      else {
+        [list[i], list[i + 1]] = [a, b];
+        for (const [link, pts] of old) paths.set(link, pts);
+      }
+    }
+    if (!improved) break;
+  }
+  function draw(pts, from, to, width, arrow) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', pts.map(([x, y], i) => i === 0 ? `M ${x} ${y}` : pts[i - 1][1] === y ? `H ${x}` : `V ${y}`).join(' '));
+    if (arrow) path.setAttribute('marker-end', 'url(#arrow)');
+    if (width) path.style.setProperty('--w', width + 'px');
+    path.dataset.from = from;
+    path.dataset.to = to;
+    edges.append(path);
+  }
+  const bundleWidth = count => Math.min(4.5, 1.5 + (count - 1) * 1.1);
+  for (const link of links) {
+    if (link.lead !== link) continue;
+    if (!link.bundle || link.bundle.length < 2) { draw(paths.get(link), link.from, link.to, 0, true); continue; }
+    // Each member runs thin to the corridor, then along it to the merge point;
+    // the line thickens as members join, and the shared tail is drawn once.
+    const mergeX = paths.get(link)[3][0];
+    const joined = [...link.bundle].sort((a, b) => Math.abs(paths.get(b)[1][0] - mergeX) - Math.abs(paths.get(a)[1][0] - mergeX));
+    const side = new Map();
+    for (const member of joined) {
+      const pts = paths.get(member), exit = pts[1][0], key = Math.sign(exit - mergeX);
+      side.set(key, (side.get(key) || 0) + 1);
+      draw(pts.slice(0, 3), member.from, member.to, 0, false);
+      draw(pts.slice(2, 4), member.from, member.to, bundleWidth(side.get(key)), false);
+    }
+    draw(paths.get(link).slice(3), joined.map(member => member.from).join(' '), link.to, bundleWidth(joined.length), true);
+  }
+  if (!visible.length) graph.append(Object.assign(document.createElement('p'), { className: 'empty-graph', textContent: 'No tickets to show.' }));
+}
+function updateNodes() {
+  for (const t of visibleTickets()) {
+    const button = document.getElementById(nodeId(t.id));
+    if (!button) continue;
+    button.style.setProperty('--color', color(group(t)));
+    button.dataset.status = t.status;
+    const span = (cls, text) => Object.assign(document.createElement('span'), { className: cls, textContent: text });
+    const meta = span('node-meta', '');
+    const dot = span('dot', '');
+    const status = span('status', statusLabel(t.status));
+    status.dataset.status = t.status;
+    meta.append(dot, span('node-id', t.id), status);
+    if (t.metadata.priority) meta.append(span('node-priority', 'P' + t.metadata.priority));
+    button.replaceChildren(meta, span('node-title', t.title));
+    button.title = t.title;
+    button.setAttribute('aria-label', `${t.id}: ${t.title}, ${statusLabel(t.status)}`);
+  }
+}
+function appendInline(host, value) {
+  const pattern = /(\x60[^\x60]+\x60|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
+  let end = 0;
+  for (const match of value.matchAll(pattern)) {
+    host.append(document.createTextNode(value.slice(end, match.index)));
+    const token = match[0];
+    let element;
+    if (token.startsWith('\x60')) {
+      element = document.createElement('code');
+      element.textContent = token.slice(1, -1);
+    } else if (token.startsWith('**')) {
+      element = document.createElement('strong');
+      element.textContent = token.slice(2, -2);
+    } else if (token.startsWith('*')) {
+      element = document.createElement('em');
+      element.textContent = token.slice(1, -1);
+    } else {
+      const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
+      if (/^https?:\/\//.test(link[2])) {
+        element = document.createElement('a');
+        element.href = link[2];
+        element.target = '_blank';
+        element.rel = 'noopener noreferrer';
+        element.textContent = link[1];
+      } else {
+        element = document.createTextNode(token);
+      }
+    }
+    host.append(element);
+    end = match.index + token.length;
+  }
+  host.append(document.createTextNode(value.slice(end)));
+}
+function renderMarkdown(value) {
+  const host = document.querySelector('#body');
+  host.replaceChildren();
+  const lines = value.replace(/\r\n/g, '\n').split('\n');
+  if (lines[0]?.startsWith('# ')) lines.shift();
+  const block = line => /^(#{1,6} |[-*+] |\d+\. |> |\x60{3})/.test(line);
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    if (/^\x60{3}/.test(line)) {
+      const code = [];
+      i++;
+      while (i < lines.length && !/^\x60{3}/.test(lines[i])) code.push(lines[i++]);
+      if (i < lines.length) i++;
+      const pre = document.createElement('pre');
+      const inner = document.createElement('code');
+      inner.textContent = code.join('\n');
+      pre.append(inner);
+      host.append(pre);
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      const element = document.createElement('h' + Math.min(6, heading[1].length + 1));
+      appendInline(element, heading[2]);
+      host.append(element);
+      i++;
+      continue;
+    }
+    const list = /^(?:[-*+] |\d+\. )/.exec(line);
+    if (list) {
+      const ordered = /\d/.test(line[0]);
+      const element = document.createElement(ordered ? 'ol' : 'ul');
+      while (i < lines.length && /^(?:[-*+] |\d+\. )/.test(lines[i]) && /\d/.test(lines[i][0]) === ordered) {
+        const item = document.createElement('li');
+        appendInline(item, lines[i].replace(/^(?:[-*+] |\d+\. )/, ''));
+        element.append(item);
+        i++;
+      }
+      host.append(element);
+      continue;
+    }
+    if (line.startsWith('> ')) {
+      const quote = document.createElement('blockquote');
+      const parts = [];
+      while (i < lines.length && lines[i].startsWith('> ')) parts.push(lines[i++].slice(2));
+      appendInline(quote, parts.join(' '));
+      host.append(quote);
+      continue;
+    }
+    const parts = [line];
+    i++;
+    while (i < lines.length && lines[i].trim() && !block(lines[i])) parts.push(lines[i++]);
+    const paragraph = document.createElement('p');
+    appendInline(paragraph, parts.join(' '));
+    host.append(paragraph);
+  }
+}
+let tooltipIndex = 0, detailSignature = '';
+function flash(button, message) {
+  const label = button.querySelector('.pill-text, .label') || button;
+  if (label.dataset.old === undefined) label.dataset.old = label.textContent;
+  label.textContent = message;
+  clearTimeout(label.flashTimer);
+  label.flashTimer = setTimeout(() => { label.textContent = label.dataset.old; delete label.dataset.old; }, 1200);
+}
+async function copyText(value, button) {
+  try {
+    await navigator.clipboard.writeText(value);
+    flash(button, 'Copied');
+  } catch {
+    flash(button, 'Copy failed');
+  }
+}
+document.querySelector('#detail-id').addEventListener('click', event => copyText(selected, event.currentTarget));
+function pill(value, action, label, hint = value) {
+  const element = document.createElement(action ? 'button' : 'span');
+  element.className = 'pill';
+  if (action) {
+    element.type = 'button';
+    element.setAttribute('aria-label', label);
+    element.addEventListener('click', () => action(element));
+  } else {
+    element.tabIndex = 0;
+  }
+  const text = document.createElement('span');
+  text.className = 'pill-text';
+  text.textContent = value;
+  const tooltip = document.createElement('span');
+  tooltip.className = 'tooltip';
+  tooltip.id = 'tip-' + (++tooltipIndex);
+  tooltip.setAttribute('role', 'tooltip');
+  tooltip.textContent = hint;
+  element.setAttribute('aria-describedby', tooltip.id);
+  element.append(text, tooltip);
+  return element;
+}
+const listValue = value => (value || '').replace(/^\[|\]$/g, '').split(',').map(item => item.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+function openTicket(id) { selected = id; updateSelection(); }
+function updateSelection() {
+  const related = new Set();
+  edges.querySelectorAll('path[data-from]').forEach(path => {
+    const sources = path.dataset.from.split(' ');
+    const hit = sources.includes(selected) || path.dataset.to === selected;
+    path.classList.toggle('related', hit);
+    if (hit) {
+      for (const id of path.dataset.to === selected ? sources : [selected]) related.add(id);
+      related.add(path.dataset.to);
+      edges.append(path);
+    }
+  });
+  graph.querySelectorAll('.node').forEach(n => {
+    n.setAttribute('aria-pressed', String(n.id === nodeId(selected)));
+    n.classList.toggle('related', n.id !== nodeId(selected) && [...related].some(id => n.id === nodeId(id)));
+  });
+  edges.classList.toggle('focused', related.size > 0);
+  const t = byId().get(selected);
+  document.querySelector('#empty').hidden = !!t;
+  document.querySelector('#details').hidden = !t;
+  if (!t) { detailSignature = ''; return; }
+  const signature = JSON.stringify([t.id, t.title, t.body, t.metadata]);
+  if (signature === detailSignature) return;
+  detailSignature = signature;
+  const map = byId();
+  document.querySelector('#detail-title').textContent = t.title;
+  document.querySelector('#detail-id .label').textContent = t.id;
+  const summary = document.querySelector('#summary');
+  const status = Object.assign(document.createElement('span'), { className: 'status', textContent: statusLabel(t.status) });
+  status.dataset.status = t.status;
+  summary.replaceChildren(status);
+  for (const value of [t.type, t.metadata.priority && 'P' + t.metadata.priority, t.metadata.assignee]) {
+    if (value) summary.append(Object.assign(document.createElement('span'), { textContent: value }));
+  }
+  if (t.metadata.created) summary.append(Object.assign(document.createElement('span'), { textContent: t.metadata.created.slice(0, 10), title: 'Created ' + t.metadata.created }));
+  renderMarkdown(t.body);
+  const meta = document.querySelector('#metadata');
+  meta.replaceChildren();
+  const ticketPills = (dd, ids) => {
+    for (const id of ids) dd.append(map.has(id)
+      ? pill(id, () => openTicket(id), 'Open ticket ' + id + ': ' + map.get(id).title, map.get(id).title)
+      : pill(id));
+  };
+  const order = ['parent', 'deps', 'links', 'tags'];
+  const rank = key => order.includes(key) ? order.indexOf(key) : order.length;
+  const entries = Object.entries(t.metadata)
+    .filter(([key, value]) => !['id', 'title', 'status', 'type', 'priority', 'assignee', 'created'].includes(key)
+      && value && !/^\[\s*\]$/.test(value))
+    .sort((a, b) => rank(a[0]) - rank(b[0]));
+  for (const [key, value] of entries) {
+    const dt = document.createElement('dt'), dd = document.createElement('dd');
+    dt.textContent = key;
+    if (key === 'deps' || key === 'links') {
+      ticketPills(dd, key === 'deps' ? t.deps : listValue(value));
+    } else if (key === 'parent' && map.has(value)) {
+      const parent = pill(map.get(value).title, () => openTicket(value), 'Open epic ' + value);
+      const dot = Object.assign(document.createElement('span'), { className: 'dot' });
+      dot.style.setProperty('--color', color(value));
+      parent.prepend(dot);
+      dd.append(parent);
+    } else if (key === 'tags') {
+      const tags = listValue(value);
+      for (const tag of tags) dd.append(pill(tag));
+    } else if (/^\[.*\]$/.test(value) || value.length > 40) {
+      const items = /^\[.*\]$/.test(value) ? listValue(value) : [value];
+      for (const item of items) dd.append(pill(item));
+    } else {
+      dd.textContent = value;
+    }
+    meta.append(dt, dd);
+  }
+  promptText = `Use $ticket-fan-out to execute ticket ${t.id} in ${project}. Read .tickets/${t.id}.md, follow its dependencies and acceptance criteria, and verify the result.`;
+}
+let resizeTimer;
+function relayoutForViewport() {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (!rowCounts.length || chooseBandCount(rowCounts) === bandCount) return;
+    layout();
+    updateNodes();
+    updateSelection();
+    fit();
+  }, 150);
+}
+addEventListener('resize', relayoutForViewport);
+function render() {
+  updateLegend();
+  const visible = visibleTickets();
+  const key = visible.map(t => t.id + ':' + t.parent + ':' + t.deps.join(',')).sort().join('|');
+  if (key !== structure) { structure = key; layout(); }
+  updateNodes();
+  updateSelection();
+  if (!fitted && visible.length) { fitted = true; fit(); }
+  document.querySelector('#count').textContent = visible.length + ' / ' + tickets.filter(t => t.type !== 'epic').length + ' tickets';
+}
+document.querySelector('#show-closed').addEventListener('change', event => {
+  showClosed = event.target.checked;
+  if (!showClosed) {
+    showClosedEpics = false;
+    document.querySelector('#show-closed-epics').checked = false;
+  }
+  document.querySelector('#closed-epic-label').hidden = !showClosed;
+  render();
+});
+document.querySelector('#show-closed-epics').addEventListener('change', event => {
+  showClosedEpics = event.target.checked;
+  render();
+});
+async function refresh() {
+  try {
+    const response = await fetch('/api/tickets', { cache: 'no-store', headers: etag ? { 'If-None-Match': etag } : {} });
+    if (response.status === 304) return;
+    if (!response.ok) throw new Error('Ticket read failed (' + response.status + ')');
+    etag = response.headers.get('ETag') || '';
+    const data = await response.json();
+    const next = data.tickets;
+    project = data.project;
+    const name = project.split(/[\\/]/).filter(Boolean).pop() || '';
+    document.querySelector('#project').textContent = name || 'Ticket view';
+    document.querySelector('.app-name').hidden = !name;
+    document.title = name ? name + ' · Ticket view' : 'Ticket view';
+    tickets = next;
+    render();
+    document.querySelector('#error').textContent = '';
+  } catch (error) { document.querySelector('#error').textContent = error.message; }
+}
+document.querySelector('#copy').addEventListener('click', event => copyText(promptText, event.currentTarget));
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>"""
+
+
+def tickets_from(directory):
+    tickets = []
+    for path in sorted(directory.glob("*.md")):
+        content = path.read_text(encoding="utf-8", errors="replace")
+        lines = content.splitlines()
+        metadata = {}
+        body_start = 0
+        if lines and lines[0] == "---":
+            for index, line in enumerate(lines[1:], 1):
+                if line == "---":
+                    body_start = index + 1
+                    break
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    metadata[key.strip()] = value.strip()
+        body = "\n".join(lines[body_start:]).strip()
+        heading = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
+        deps = metadata.get("deps", "[]").strip("[]")
+        tickets.append({
+            "id": path.stem,
+            "title": heading.group(1) if heading else path.stem,
+            "status": metadata.get("status", "open"),
+            "type": metadata.get("type", "task"),
+            "parent": metadata.get("parent", ""),
+            "deps": [item.strip().strip("'\"") for item in deps.split(",") if item.strip()],
+            "metadata": metadata,
+            "body": body,
+        })
+    return tickets
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Open a live ticket graph")
+    parser.add_argument("--port", type=int, default=0, help="Local port (default: automatic)")
+    parser.add_argument("--no-open", action="store_true", help="Do not open a browser")
+    args = parser.parse_args()
+    directory = Path(os.environ.get("TICKETS_DIR", ".tickets")).expanduser().resolve()
+    if not directory.is_dir():
+        parser.error("No .tickets directory found; run from a ticket project")
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_GET(self):
+            if self.path == "/api/tickets":
+                try:
+                    payload = json.dumps({
+                        "project": str(directory.parent),
+                        "tickets": tickets_from(directory),
+                    }, ensure_ascii=False).encode()
+                except OSError as error:
+                    self.send_error(500, str(error))
+                    return
+                etag = hashlib.sha256(payload).hexdigest()
+                if self.headers.get("If-None-Match") == etag:
+                    self.send_response(304)
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("ETag", etag)
+            elif self.path == "/":
+                payload = PAGE.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+            else:
+                self.send_error(404)
+                return
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as server:
+        url = "http://127.0.0.1:" + str(server.server_port)
+        print("Ticket view: " + url, flush=True)
+        if not args.no_open:
+            webbrowser.open(url)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+
+
+if __name__ == "__main__":
+    main()

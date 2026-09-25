@@ -52,6 +52,7 @@ Feature: Ticket ID Resolution
 
   Scenario: ID resolution works with status command
     Given a ticket exists with ID "test-9999" and title "Test ticket"
+    And ticket "test-9999" has status "ready"
     When I run "ticket status 9999 in_progress"
     Then the command should succeed
     And ticket "test-9999" should have field "status" with value "in_progress"
