@@ -105,12 +105,18 @@ shows eligible `open`, `ready`, and `partially_implemented` tickets. Use `partia
 
 `tk view` opens a local graph for the current project's `.tickets/`
 folder. Dependencies point from left to right. When the graph is much wider
-than the window, later columns wrap into stacked bands below the first. Epics
+than the window, later columns wrap into stacked bands below the first. Tickets
+with no visible dependency in either direction form a pool: a grid left of the
+dependency columns, set apart by a dotted line. The pool's column count is
+chosen so the whole graph is close to the window's shape. Epics
 appear in the color legend with their visible ticket counts; their child
 tickets appear as nodes grouped by epic within each column. Closed tickets are
 hidden by default. Show closed tickets, then show closed epics, to reveal older work.
 Click an epic name to filter its tickets; click it again to clear the filter.
 The epic filter is disabled when only one epic is available.
+Click an assignee in the header legend to show only that assignee's tickets; click it again to clear the filter. The epic and assignee filters combine.
+**Copy prompt for visible tickets**, at the top right, copies one prompt that lists every visible ticket with dependencies first, ready to paste into a single agent.
+**Copy full tickets** copies the same summary followed by each ticket's front matter and body, for sessions that cannot read the ticket files.
 Right-click a ticket node to set its assignee or status. The assignee list includes names already used by tickets, Agent, Unassigned, and Add new for entering a name. Assignees appear as colored initials in the header legend, on nodes, and in the inspector. The status list offers open, ready, in progress, partially implemented, and closed; entering in progress follows the same readiness and dependency checks as `tk status`. Nodes abbreviate partially implemented as Partial, while the inspector shows its full name. Press Shift+F10 on a focused node to open the menu from the keyboard.
 
 Press `C` to connect tickets. If a ticket is selected, it becomes the source; otherwise click a source ticket, then click the dependent target. The arrow points from source to target. Cycles and duplicate dependencies are rejected. Press Escape to cancel. After a connection is created, an Undo button appears in a toast at the top of the screen for five seconds. Click an arrow to select it, then press Delete to remove that dependency.
@@ -124,17 +130,41 @@ Drag the inspector's left edge to resize it; the width is remembered, and a
 double-click resets it.
 The page checks for changes each second and keeps node positions stable until
 dependencies or epics change, or until a window resize changes the number of
-bands. Use `tk view --no-open` to print the URL without opening a browser.
+bands or pool columns. Use `tk view --no-open` to print the URL without opening a browser.
 
-The **Initiatives** tab lists the project's `initiative-map.json` files separately
-from tickets. It first shows only initiatives with **No recorded start**. Clear
-that filter to include started and complete work. Each entry shows its summary,
-phase, planning status, milestones, file path, and expandable map contents.
+The **Initiatives** tab is a reader for the project's `initiative-map.json`
+files and the Markdown documents beside them. The list on the left has a search
+box and a work-status filter: **No start**, **Started**, **Complete**, or
+**All**. It first shows initiatives with no recorded start when there are any.
+Press `/` to search, and use the arrow keys to move through the list. Matching
+text in titles and summaries is highlighted.
+
+The right side runs the full height of the window. It shows the selected
+initiative: its title, summary, work status, phase, and a tab for each Markdown
+file in its folder. The tabs stay at the top of the window as you scroll. The intent brief, shape
+brief, and implementation plan come first, then any other documents. Documents
+render with headings, tables, nested lists, task lists, and code blocks. Wide
+windows show an outline of the document's headings. A link to another Markdown
+file in the project opens that file in the reader; Back returns to the previous
+document. The **Map** tab lays out the map itself for reading: lifecycle stages,
+shape, milestones, linked tickets, claims, sources, and history. Fields without
+a dedicated layout still appear. Click a linked ticket to open it in the graph.
+
+**Copy prompt to update** copies a prompt that names the software design sleuth
+skill and gives the full paths of the initiative folder, its map, and the open
+document, ending with a place for your comments. Click the folder path under
+the summary to copy its full path.
+
+The tab, selected initiative, open document, search, and filter are stored in
+the URL, so a refresh returns to the same place. The reading position is
+restored as well.
+
 Work status uses linked ticket states, then recorded milestone or execution
 states. A current plan alone does not mean work has started. **No recorded
 start** means the files contain no evidence of started work.
-Maps refresh with tickets. Invalid maps show an error without hiding valid maps.
-The scan skips hidden folders, dependencies, build output, vendor files, and `tmp/`.
+Maps and documents refresh with tickets. Invalid maps show an error without
+hiding valid maps. The scan skips hidden folders, dependencies, build output,
+vendor files, and `tmp/`. Only Markdown files inside the project can be read.
 
 ## Plugins
 

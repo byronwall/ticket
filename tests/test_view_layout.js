@@ -32,4 +32,22 @@ const position = id => ordered.flatMap(ids => ids).indexOf(id);
 for (const [a, b] of [[['a', 'z'], ['b', 'y']], [['a', 'z'], ['c', 'x']], [['b', 'y'], ['c', 'x']]]) {
   assert.ok((position(a[0]) - position(b[0])) * (position(a[1]) - position(b[1])) > 0);
 }
+
+// The shape of the graph follows the viewport: unattached tickets form a pool
+// grid instead of one tall column, and dependency columns wrap into bands.
+const shapeCode = source.slice(source.indexOf('const NODE_W ='), source.indexOf('const statusLabel ='));
+const shapeFor = (width, height) => vm.runInNewContext(shapeCode + '\nchooseShape', { viewport: { clientWidth: width, clientHeight: height } });
+const wide = shapeFor(1990, 1000), tall = shapeFor(700, 1400);
+// The reported graph: nine unattached tickets beside two columns of two.
+assert.deepEqual({ ...wide([2, 2], 9) }, { bands: 1, poolColumns: 2 });
+// Only unattached tickets: a grid close to the viewport's shape.
+assert.deepEqual({ ...wide([0], 24) }, { bands: 1, poolColumns: 5 });
+assert.deepEqual({ ...tall([0], 24) }, { bands: 1, poolColumns: 2 });
+// No pool leaves band wrapping as it was.
+assert.deepEqual({ ...wide([2, 2], 0) }, { bands: 1, poolColumns: 0 });
+assert.equal(wide(new Array(24).fill(1), 0).bands, 4);
+// A pool beside a long chain still wraps the chain.
+assert.ok(wide(new Array(24).fill(1), 6).bands > 1);
+// A hidden viewport has no shape to match.
+assert.deepEqual({ ...shapeFor(0, 0)([1, 1], 9) }, { bands: 1, poolColumns: 3 });
 console.log('ticket view layout: ok');

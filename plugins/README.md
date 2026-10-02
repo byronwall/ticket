@@ -2,7 +2,7 @@
 
 Official plugins that extend `tk` with additional commands.
 
-`ticket-view` serves a local graph for the current `.tickets/` folder. A node's right-click menu changes its assignee or status; status changes use the ticket command. Press `C` and select source and target tickets to add a dependency, or select an arrow and press Delete to remove it. Its Initiatives tab lists project initiative maps and filters work with no recorded start. It requires Python 3. The source checkout also exposes it as `tk view`.
+`ticket-view` serves a local graph for the current `.tickets/` folder. A node's right-click menu changes its assignee or status; status changes use the ticket command. Press `C` and select source and target tickets to add a dependency, or select an arrow and press Delete to remove it. Its Initiatives tab is a reader for project initiative maps and their Markdown documents, with search, a work-status filter, and a prompt for updating the selected initiative. It requires Python 3. The source checkout also exposes it as `tk view`.
 
 ## Writing Plugins
 

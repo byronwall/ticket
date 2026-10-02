@@ -151,9 +151,37 @@ ticket that is three rows.
 Below a divider, the ticket body renders as Markdown at 14px. That is one size
 up from the rest of the UI, because this is the part you actually read.
 
+## Initiatives
+
+The second tab is for reading, not scanning. An initiative is a folder with an
+`initiative-map.json` and a few Markdown documents: an intent brief, a shape
+brief, a plan, sometimes research. I want to pick one and read those documents
+without opening an editor.
+
+The layout is a list on the left and the selected initiative on the right. The
+page header sits above the list only, so the reader runs the full height of the
+window and the document tabs stick to its top edge. Vertical space belongs to
+the document. The list has a search box and a work-status filter. The right side has one tab per
+document and a Map tab. Document text is 16.5px in a column about 46rem wide,
+the largest type on the page, because this is long prose. Switching initiatives
+keeps the same kind of document open, so I can compare shape briefs one after
+another.
+
+I do not want to read raw JSON. The Map tab lays the map out as a page:
+lifecycle stages, shape, milestones, linked tickets, claims, sources, history.
+Maps vary between projects, so any field without a dedicated layout still
+appears in a generic one. Nothing in the file is hidden.
+
+The page still never writes to initiatives. To change one, **Copy prompt to
+update** gives an agent the full paths and the sleuth skill, and leaves room
+for my comments.
+
+The tab, initiative, document, search, and filter live in the URL. A refresh
+should not move me.
+
 ## The header
 
-Project name as the title, a muted "Ticket view" label next to it, a count pill
+Project name as the title, the Tickets and Initiatives tabs next to it, a count pill
 (`12 / 64 tickets`), and the two closed-ticket filters styled as toggle buttons
 that turn blue when on. The epic legend sits in its own row below and scrolls
 sideways on a phone instead of wrapping.

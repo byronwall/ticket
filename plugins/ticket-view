@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.4.0
+# tk-plugin-version: 1.6.0
 
 """Local ticket graph with status updates. Python 3 standard library only."""
 
@@ -15,6 +15,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+from urllib.parse import parse_qs, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import webbrowser
 
@@ -42,18 +43,23 @@ PAGE = r"""<!doctype html>
   header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-height: 48px; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
   .brand { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
   h1 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
-  .app-name { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+  .app-name { display: none; }
   #count { padding: 2px 8px; border-radius: 999px; background: var(--sunken); border: 1px solid var(--line); color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   #count:empty, #error:empty { display: none; }
   #assignee-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
   #assignee-legend:empty { display: none; }
   .assignee-legend-label { color: var(--ink-3); font-size: 12px; }
-  .assignee-key { display: inline-flex; align-items: center; gap: 4px; max-width: 160px; color: var(--ink-2); font-size: 12px; white-space: nowrap; }
+  .assignee-key { display: inline-flex; align-items: center; gap: 4px; max-width: 160px; padding: 2px 8px 2px 3px; border: 1px solid transparent; border-radius: 999px; background: none; color: var(--ink-2); font-size: 12px; white-space: nowrap; cursor: pointer; }
+  .assignee-key:disabled { cursor: default; }
+  .assignee-key:hover:not(:disabled) { background: var(--sunken); border-color: var(--line); }
+  .assignee-key[aria-pressed="true"] { border-color: #a9c4e6; background: var(--accent-soft); color: var(--accent); }
   .assignee-key-name { overflow: hidden; text-overflow: ellipsis; }
   #error { color: var(--danger); font-weight: 550; }
   #filters { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; }
-  #filters label { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px; white-space: nowrap; cursor: pointer; color: var(--ink-2); font-size: 12px; font-weight: 550; }
-  #filters label:hover { background: var(--sunken); color: var(--ink); }
+  #filters label, #filters button { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px; white-space: nowrap; cursor: pointer; color: var(--ink-2); font-size: 12px; font-weight: 550; }
+  #filters button { background: var(--surface); }
+  #filters button:disabled { cursor: default; opacity: 0.55; }
+  #filters label:hover, #filters button:hover:not(:disabled) { background: var(--sunken); color: var(--ink); }
   #filters label:has(input:checked) { border-color: #a9c4e6; background: var(--accent-soft); color: var(--accent); }
   #filters label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
   #filters input { margin: 0; }
@@ -87,6 +93,7 @@ PAGE = r"""<!doctype html>
   #fit { gap: 5px; font-size: 12px; }
   #edges { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
   #edges > path { fill: none; stroke: var(--edge); stroke-width: var(--w, 1.5px); }
+  #edges > .pool-divider { stroke: var(--line-2); stroke-width: 1.5px; stroke-dasharray: 2 7; stroke-linecap: round; }
   #edges > path.edge-glow { stroke: var(--accent); stroke-width: 2.5px; opacity: 0; pointer-events: none; filter: drop-shadow(0 2px 4px #1f63b899); }
   #edges > path.edge-glow.hovered, #edges > path.edge-glow.selected { opacity: 1; }
   #edges > path.edge-hit { stroke: transparent; stroke-width: 14px; pointer-events: stroke; cursor: pointer; }
@@ -175,22 +182,166 @@ PAGE = r"""<!doctype html>
   .markdown blockquote { margin: 10px 0; padding-left: 12px; border-left: 2px solid var(--line-2); color: var(--ink-2); }
   .markdown a { color: var(--accent); text-underline-offset: 2px; }
   [hidden] { display: none !important; }
-  #tabs { display: flex; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
-  #tabs button { padding: 10px 2px; border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer; color: var(--ink-2); }
-  #tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 650; }
-  #initiatives-panel { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
-  .initiative-toolbar, #initiative-list { max-width: 960px; margin: 0 auto; }
-  .initiative-toolbar h2 { margin: 0; font-size: 18px; }
-  .initiative-toolbar p { margin: 6px 0 12px; color: var(--ink-2); }
-  .initiative-toolbar label { display: inline-flex; gap: 8px; align-items: center; margin-bottom: 16px; }
-  .initiative { padding: 16px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
-  .initiative h3 { margin: 0 0 6px; font-size: 16px; }
-  .initiative p { margin: 6px 0; }
-  .initiative-state { color: var(--accent); font-weight: 600; }
-  .initiative-info, .initiative-path { color: var(--ink-3); font-size: 12px; overflow-wrap: anywhere; }
-  .initiative details { margin-top: 12px; }
-  .initiative summary { cursor: pointer; color: var(--ink-2); }
-  .initiative pre { max-height: 420px; overflow: auto; padding: 12px; background: var(--sunken); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  #tabs { display: flex; gap: 2px; }
+  #tabs button { height: 30px; padding: 0 10px; border: 0; border-radius: 6px; background: none; cursor: pointer; color: var(--ink-2); font-weight: 550; }
+  #tabs button:hover { background: var(--sunken); color: var(--ink); }
+  #tabs button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 650; }
+  .markdown hr { margin: 20px 0; border: 0; border-top: 1px solid var(--line); }
+  .markdown .table-wrap { margin: 8px 0 14px; overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+  .markdown table { width: 100%; border-collapse: collapse; font-size: 0.92em; line-height: 1.45; overflow-wrap: break-word; }
+  .markdown th, .markdown td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .markdown th { background: var(--sunken); color: var(--ink-2); font-weight: 620; }
+  .markdown tbody tr:last-child td { border-bottom: 0; }
+  .markdown li.task { list-style: none; }
+  .markdown li.task > input { margin: 0 8px 0 -20px; vertical-align: -1px; }
+  .markdown li > p { margin: 6px 0 0; }
+  .markdown li > ul, .markdown li > ol { margin: 4px 0 0; }
+  .markdown del { color: var(--ink-3); }
+  .file-ref { text-decoration: underline dotted var(--line-2); text-underline-offset: 3px; cursor: help; }
+  #initiatives-panel { --ink-3: #5d6a79; flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(320px, 26vw, 400px) minmax(0, 1fr); font-size: 15px; line-height: 1.5; caret-color: var(--accent); }
+  #initiative-nav { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+  .inav-tools { display: grid; gap: 10px; padding: 14px 14px 12px; border-bottom: 1px solid var(--line); }
+  #initiative-search { width: 100%; height: 36px; padding: 0 10px 0 34px; border: 1px solid var(--line-2); border-radius: 8px; font: inherit; color: var(--ink);
+    background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%235d6a79' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5 14 14'/%3E%3C/svg%3E") 11px center / 15px no-repeat; }
+  #initiative-search::placeholder { color: var(--ink-3); }
+  #initiative-search:focus-visible { outline-offset: 0; border-color: var(--accent); }
+  .segments { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface); }
+  .segments button { flex: 1 1 auto; height: 28px; padding: 0 5px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); font-size: 12.5px; white-space: nowrap; cursor: pointer; }
+  .segments button:hover { background: var(--sunken); color: var(--ink); }
+  .segments button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 620; }
+  .segments span { margin-left: 3px; font-weight: 400; font-variant-numeric: tabular-nums; }
+  #initiative-list { flex: 1; min-height: 0; display: grid; gap: 2px; align-content: start; margin: 0; padding: 8px; list-style: none; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+  .inav-item { display: grid; gap: 4px; width: 100%; padding: 11px 12px 12px; border: 1px solid transparent; border-radius: 8px; background: none; text-align: left; cursor: pointer; }
+  .inav-item:hover { background: #e8ecf0; }
+  .inav-item[aria-current="true"] { border-color: var(--line-2); background: var(--surface); box-shadow: 0 1px 2px #17212c0f, 0 3px 8px #17212c0a; }
+  .inav-title { font-size: 15px; font-weight: 620; line-height: 1.3; }
+  .inav-summary { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--ink-2); font-size: 13.5px; line-height: 1.45; }
+  .inav-item mark { border-radius: 2px; background: #ffe9a8; color: inherit; box-shadow: 0 0 0 1px #ffe9a8; }
+  .inav-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 2px; color: var(--ink-3); font-size: 12.5px; }
+  .inav-empty { padding: 16px 12px; color: var(--ink-2); }
+  .inav-empty button { padding: 0; border: 0; background: none; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  #initiative-detail { --gutter: 48px; min-width: 0; overflow-y: auto; background: var(--surface); scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+  #initiative-detail:focus-visible { outline: none; }
+  .idetail-empty { margin: 0; padding: 40px var(--gutter); color: var(--ink-2); font-size: 16px; }
+  .idetail-head { padding: 22px var(--gutter) 16px; }
+  .idetail-back { display: none; margin: 0 0 14px; padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; }
+  .idetail-title { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px 24px; }
+  .idetail-title .ibutton { flex: none; margin-top: 2px; }
+  .idetail-head h2 { flex: 1 1 18rem; max-width: 30ch; margin: 0; font-size: 28px; font-weight: 680; line-height: 1.18; letter-spacing: -0.022em; text-wrap: balance; }
+  .idetail-summary { max-width: 72ch; margin: 8px 0 0; color: var(--ink-2); font-size: 16.5px; line-height: 1.55; text-wrap: pretty; }
+  .idetail-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin-top: 10px; color: var(--ink-2); font-size: 13.5px; }
+  .idetail-meta .status { color: var(--ink); font-weight: 550; }
+  .idetail-path { max-width: 100%; padding: 0; border: 0; background: none; color: var(--ink-2); font: 12.5px var(--mono); text-decoration: underline dotted var(--line-2); text-underline-offset: 3px; overflow-wrap: anywhere; text-align: left; cursor: pointer; }
+  .idetail-path:hover { color: var(--accent); text-decoration-color: currentColor; }
+  .ibutton { display: inline-flex; align-items: center; max-width: 100%; height: 32px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface); color: var(--ink-2); font-size: 13.5px; font-weight: 550; cursor: pointer; }
+  .ibutton:hover { background: var(--sunken); color: var(--ink); }
+  .ibutton.primary { border-color: var(--accent); background: var(--accent); color: white; }
+  .ibutton.primary:hover { background: #18559f; color: white; }
+  .ibutton.path { font: 12.5px var(--mono); }
+  .ibutton .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .idetail-tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 22px; padding: 0 var(--gutter); border-bottom: 1px solid var(--line); background: var(--surface); overflow-x: auto; scrollbar-width: none; }
+  .idetail-tabs button { flex: none; padding: 12px 0 11px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--ink-2); font-size: 14.5px; white-space: nowrap; cursor: pointer; }
+  .idetail-tabs button:hover { color: var(--ink); }
+  .idetail-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 620; }
+  .idetail-tabs button:focus-visible { outline-offset: -2px; }
+  .idetail-tabs .tab-note { margin-left: 6px; color: var(--ink-3); font-size: 12.5px; font-weight: 400; }
+  .idetail-tabs .tab-end { margin-left: auto; }
+  .idetail-body { display: grid; grid-template-columns: minmax(0, 46rem) 220px; gap: 56px; padding: 22px var(--gutter) 120px; }
+  .idetail-body.wide { grid-template-columns: minmax(0, 58rem) 200px; }
+  .idetail-article { min-width: 0; }
+  .idetail-article.enter { animation: doc-in .28s cubic-bezier(.16, 1, .3, 1); }
+  @keyframes doc-in { from { opacity: .55; transform: translateY(5px); } }
+  @media (prefers-reduced-motion: reduce) { .idetail-article.enter { animation: none; } }
+  .doc-file { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 16px; color: var(--ink-3); font-size: 13px; }
+  .doc-error { color: var(--danger); }
+  .doc.markdown { max-width: none; font-size: 16.5px; line-height: 1.7; text-wrap: pretty; }
+  .doc.markdown h2, .doc.markdown h3, .doc.markdown h4, .doc.markdown h5, .doc.markdown h6, .map h3 { scroll-margin-top: 68px; text-wrap: balance; }
+  .doc.markdown h2 { margin: 0 0 18px; font-size: 26px; line-height: 1.2; letter-spacing: -0.02em; }
+  .doc.markdown h3 { margin: 46px 0 12px; font-size: 21.5px; font-weight: 660; line-height: 1.3; letter-spacing: -0.014em; }
+  .doc.markdown h4 { margin: 32px 0 8px; font-size: 18px; font-weight: 640; line-height: 1.35; }
+  .doc.markdown h5, .doc.markdown h6 { margin: 26px 0 6px; font-size: 16.5px; }
+  .doc.markdown p { margin: 0 0 18px; }
+  .doc.markdown ul, .doc.markdown ol { margin: 0 0 18px; padding-left: 26px; }
+  .doc.markdown li { margin: 7px 0; padding-left: 2px; }
+  .doc.markdown li > p { margin: 8px 0 0; }
+  .doc.markdown li > ul, .doc.markdown li > ol { margin: 6px 0 0; }
+  .doc.markdown li.task > input { margin-left: -24px; }
+  .doc.markdown code { padding: 2px 5px; border-radius: 4px; font-size: 0.85em; }
+  .doc.markdown pre { margin: 4px 0 22px; padding: 14px 16px; border-radius: 8px; }
+  .doc.markdown pre code { padding: 0; font-size: 13.5px; line-height: 1.6; }
+  .doc.markdown blockquote { margin: 0 0 18px; padding: 14px 18px; border: 0; border-radius: 8px; background: var(--sunken); color: var(--ink-2); }
+  .doc.markdown blockquote > :last-child { margin-bottom: 0; }
+  .doc.markdown hr { margin: 36px 0; }
+  .doc.markdown .table-wrap { margin: 4px 0 24px; border-radius: 8px; }
+  .doc.markdown th, .doc.markdown td { min-width: 7.5rem; padding: 9px 14px; }
+  .doc.markdown a, .map a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  .outline { position: sticky; top: 68px; align-self: start; display: grid; gap: 1px; max-height: calc(100vh - 100px); overflow-y: auto; scrollbar-width: none; }
+  .outline-title { margin: 0 0 8px 10px; color: var(--ink-3); font-size: 12.5px; font-weight: 620; }
+  .outline button { padding: 4px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); font-size: 13.5px; line-height: 1.35; text-align: left; cursor: pointer; }
+  .outline button.sub { padding-left: 22px; font-size: 13px; }
+  .outline button:hover { background: var(--sunken); color: var(--ink); }
+  .outline button[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 550; }
+  .map { font-size: 15.5px; line-height: 1.6; }
+  .map code { padding: 1px 5px; border-radius: 4px; background: #eef1f4; font: 0.86em/1.5 var(--mono); overflow-wrap: anywhere; }
+  .map-section + .map-section { margin-top: 52px; }
+  .map-section > h3 { margin: 0 0 16px; font-size: 21.5px; font-weight: 660; line-height: 1.3; letter-spacing: -0.014em; }
+  .map h4 { margin: 26px 0 8px; color: var(--ink-2); font-size: 14px; font-weight: 620; }
+  .map-section > h3 + h4 { margin-top: 0; }
+  .map-lead { display: block; max-width: 46rem; margin: 0 0 4px; font-size: 17px; line-height: 1.6; text-wrap: pretty; }
+  .map-rows { grid-template-columns: minmax(8.5rem, max-content) minmax(0, 1fr); gap: 10px 24px; margin: 0 0 16px; font-size: inherit; }
+  .map-rows dt { padding-top: 2px; color: var(--ink-2); font-size: 13.5px; line-height: 1.6; }
+  .map-rows dd { display: block; min-height: 0; }
+  .map-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 4px 44px; margin: 0 0 8px; }
+  .map-grid h4 { margin-top: 18px; }
+  .map-list { margin: 0; padding-left: 20px; }
+  .map-list li { margin: 5px 0; }
+  .map-list li::marker { color: var(--ink-3); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips span { padding: 3px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--sunken); color: var(--ink-2); font-size: 13.5px; }
+  .lifecycle { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .stage { display: grid; gap: 2px; align-content: start; width: 100%; height: 100%; padding: 12px 8px 4px 0; border: 0; border-top: 3px solid var(--line-2); background: none; text-align: left; }
+  .stage[data-state="draft"] { border-top-color: #9dbbe2; }
+  .stage[data-state="done"] { border-top-color: var(--accent); }
+  button.stage { cursor: pointer; }
+  button.stage:hover .stage-name { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  .stage-name { font-size: 15.5px; font-weight: 640; }
+  .stage-status { color: var(--ink-2); font-size: 13.5px; }
+  .stage-note { color: var(--ink-3); font-size: 12.5px; line-height: 1.4; }
+  .stage-now { justify-self: start; margin-top: 4px; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 620; }
+  .entries { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+  .entry-main { min-width: 0; }
+  .entries { display: grid; grid-template-columns: fit-content(11rem) minmax(0, 1fr); column-gap: 20px; }
+  .entry { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; padding: 13px 0; border-bottom: 1px solid var(--line); }
+  .entry-main:first-child { grid-column: 1 / -1; }
+  .entries + .map-rows, .entries + .map-grid, .map-rows + .map-grid { margin-top: 24px; }
+  .entries.dated .entry-title { font-weight: 400; }
+  .map-lead + .map-rows { margin-top: 18px; }
+  .entry-id { padding-top: 3px; color: var(--ink-3); font: 12.5px/1.5 var(--mono); overflow-wrap: anywhere; }
+  .entries.dated .entry-id { font: 13.5px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
+  .entry-title { font-weight: 550; text-wrap: pretty; }
+  .entry[data-state^="superseded"] .entry-title, .entry[data-state="retired"] .entry-title { color: var(--ink-3); font-weight: 400; }
+  .entry-tags { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 3px; color: var(--ink-2); font-size: 13px; }
+  .entry .map-rows { gap: 4px 18px; margin: 10px 0 0; font-size: 14px; line-height: 1.55; }
+  .entry .map-rows dt { padding-top: 1px; font-size: 13px; }
+  .entry .entries { border-top: 0; }
+  .entry .entry { padding: 6px 0; border-bottom: 0; }
+  .entry-more { margin-top: 8px; }
+  .entry-more summary { width: max-content; color: var(--accent); font-size: 13px; cursor: pointer; }
+  .entry .pill { font-size: 12.5px; }
+  .map-foot { margin: 56px 0 0; color: var(--ink-3); font-size: 13px; overflow-wrap: anywhere; }
+  @media (max-width: 1320px) {
+    .idetail-body, .idetail-body.wide { grid-template-columns: minmax(0, 46rem); }
+    .idetail-body.wide { grid-template-columns: minmax(0, 58rem); }
+    .outline { display: none; }
+  }
+  @media (max-width: 1100px) { #initiative-detail { --gutter: 32px; } }
+  @media (min-width: 801px) {
+    body.initiatives-view { display: grid; grid-template-columns: clamp(320px, 26vw, 400px) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    body.initiatives-view > header { grid-column: 1; border-right: 1px solid var(--line); }
+    body.initiatives-view #initiatives-panel { display: contents; }
+    body.initiatives-view #initiative-nav { grid-column: 1; grid-row: 2; }
+    body.initiatives-view #initiative-detail { grid-column: 2; grid-row: 1 / -1; }
+  }
   @media (max-width: 1100px) { main { --inspector-w: 340px; } }
   @media (max-width: 800px) {
     body { height: auto; min-height: 100vh; }
@@ -203,18 +354,35 @@ PAGE = r"""<!doctype html>
     aside { border-left: 0; border-top: 1px solid var(--line); min-height: 40vh; }
     #details { padding: 16px 16px 28px; }
     #controls kbd { display: none; }
+    #initiatives-panel { display: block; }
+    #initiatives-panel.detail-open #initiative-nav, #initiatives-panel:not(.detail-open) #initiative-detail { display: none; }
+    #initiative-nav { border-right: 0; }
+    #initiatives-panel:not(.detail-open) .inav-item[aria-current="true"] { border-color: transparent; background: none; box-shadow: none; }
+    #initiative-list { overflow: visible; }
+    #initiative-detail { --gutter: 18px; overflow: visible; }
+    .idetail-back { display: block; }
+    .idetail-head { padding-top: 20px; }
+    .idetail-head h2 { font-size: 23px; }
+    .idetail-tabs { gap: 18px; }
+    .idetail-body { padding-top: 22px; padding-bottom: 64px; }
+    .lifecycle { grid-template-columns: 1fr 1fr; gap: 16px 10px; }
+    .map-rows { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    .map-rows dd { margin-bottom: 8px; }
+    .entries { grid-template-columns: minmax(0, 1fr); }
+    .entry-main { grid-column: 1 / -1; }
   }
 </style>
 </head>
 <body>
-<header><div class="brand"><h1 id="project">Ticket view</h1><span class="app-name" hidden>Ticket view</span></div><span id="count"></span><div id="assignee-legend" aria-label="Assignees"></div><span id="error" role="status"></span><div id="filters">
-  <label><input id="show-closed" type="checkbox"> Show closed tickets</label>
-  <label id="closed-epic-label" hidden><input id="show-closed-epics" type="checkbox"> Show closed epics</label>
-</div></header>
-<nav id="tabs" role="tablist" aria-label="Project views">
+<header><div class="brand"><h1 id="project">Ticket view</h1><span class="app-name" hidden>Ticket view</span></div><nav id="tabs" role="tablist" aria-label="Project views">
   <button id="tickets-tab" type="button" role="tab" aria-selected="true" aria-controls="tickets-panel">Tickets</button>
   <button id="initiatives-tab" type="button" role="tab" aria-selected="false" aria-controls="initiatives-panel" tabindex="-1">Initiatives</button>
-</nav>
+</nav><span id="count"></span><div id="assignee-legend" aria-label="Assignees"></div><span id="error" role="status"></span><div id="filters">
+  <label><input id="show-closed" type="checkbox"> Show closed tickets</label>
+  <label id="closed-epic-label" hidden><input id="show-closed-epics" type="checkbox"> Show closed epics</label>
+  <button id="copy-visible" type="button"><span class="label">Copy prompt for visible tickets</span></button>
+  <button id="copy-full" type="button"><span class="label">Copy full tickets</span></button>
+</div></header>
 <main id="tickets-panel" role="tabpanel" aria-labelledby="tickets-tab">
   <div id="left"><div id="legend"></div><div id="viewport">
     <div id="connection-hint" role="status" hidden></div>
@@ -228,7 +396,7 @@ PAGE = r"""<!doctype html>
   </div></div>
   <div id="resizer" role="separator" aria-orientation="vertical" aria-label="Resize inspector" tabindex="0" title="Drag to resize, double-click to reset"></div>
   <aside id="inspector"><div id="empty"><p>Select a ticket to read it here.</p><ul>
-    <li>Drag to pan, scroll to zoom</li><li><kbd>F</kbd> fits every visible ticket</li><li>Click an epic above to filter its tickets</li>
+    <li>Drag to pan, scroll to zoom</li><li><kbd>F</kbd> fits every visible ticket</li><li>Click an epic or assignee above to filter tickets</li>
   </ul></div><div id="details" hidden>
     <h2 id="detail-title"></h2>
     <div id="summary" class="summary"></div>
@@ -238,12 +406,19 @@ PAGE = r"""<!doctype html>
   </div></aside>
 </main>
 <section id="initiatives-panel" role="tabpanel" aria-labelledby="initiatives-tab" hidden>
-  <div class="initiative-toolbar">
-    <h2>Initiatives <span id="initiative-count"></span></h2>
-    <p>Work status uses linked tickets and recorded milestone states. Planning status is shown separately.</p>
-    <label><input id="unstarted-only" type="checkbox" checked> Only show initiatives with no recorded start</label>
-  </div>
-  <div id="initiative-list" aria-live="polite"></div>
+  <nav id="initiative-nav" aria-label="Initiatives">
+    <div class="inav-tools">
+      <input id="initiative-search" type="search" placeholder="Search initiatives" aria-label="Search initiatives" autocomplete="off" spellcheck="false">
+      <div id="initiative-show" class="segments" role="group" aria-label="Filter by work status">
+        <button type="button" data-show="unstarted" title="No recorded start">No start<span></span></button>
+        <button type="button" data-show="started">Started<span></span></button>
+        <button type="button" data-show="complete">Complete<span></span></button>
+        <button type="button" data-show="all">All<span></span></button>
+      </div>
+    </div>
+    <ul id="initiative-list"></ul>
+  </nav>
+  <div id="initiative-detail" tabindex="-1"></div>
 </section>
 <div id="toast" role="status" hidden><span id="toast-message"></span><button id="toast-undo" type="button">Undo</button></div>
 <div id="ticket-menu" role="menu" aria-label="Ticket actions" hidden></div>
@@ -254,33 +429,52 @@ const legend = document.querySelector('#legend');
 const viewport = document.querySelector('#viewport');
 const palette = ['#2563eb', '#b45309', '#0f766e', '#9333ea', '#be123c', '#4d7c0f', '#0891b2', '#c2410c', '#db2777', '#a16207'];
 const colors = new Map();
-let initiatives = [], initiativeSignature = '', activeTab = 'tickets';
+let initiatives = [], activeTab = 'tickets';
 let tickets = [], selected = null, structure = '', etag = '', project = '';
-let showClosed = false, showClosedEpics = false, epicFilter = null, promptText = '';
+let showClosed = false, showClosedEpics = false, epicFilter = null, assigneeFilter = null, promptText = '';
 let zoom = 1, panX = 0, panY = 0, drag = null, suppressClick = false, fitted = false;
 let connectFrom = null, selectedEdge = null, toastTimer = null;
-const NODE_W = 240, NODE_H = 104, ROW_PITCH = 132, MIN_GAP = 64;
-let rowCounts = [], bandCount = 1;
+const NODE_W = 240, NODE_H = 104, ROW_PITCH = 132, MIN_GAP = 64, POOL_GAP = 28, POOL_SPLIT = 72;
+let rowCounts = [], pooledCount = 0, bandCount = 1, poolColumns = 0;
 const bandOf = (column, bands, columns) => Math.floor(column * bands / columns);
-// Wrap dependency columns into evenly sized, stacked bands when a single band
-// would be far wider than the viewport. Returns the number of bands.
-function chooseBandCount(counts) {
+// Pick the graph's shape so its outline is close to the viewport's. Dependency
+// columns wrap into evenly sized, stacked bands when one band would be far
+// wider than the viewport. Tickets with no visible dependency in either
+// direction form a pool: a grid left of the dependency columns, whose column
+// count is chosen here. Returns { bands, poolColumns }.
+function chooseShape(counts, pooled) {
   const target = viewport.clientWidth / viewport.clientHeight;
-  if (!counts.length || !(target > 0)) return 1;
-  const score = bands => {
-    const widths = new Array(bands).fill(0), heights = new Array(bands).fill(0);
-    counts.forEach((rows, column) => {
-      const b = bandOf(column, bands, counts.length);
-      widths[b] += NODE_W + MIN_GAP;
-      heights[b] = Math.max(heights[b], rows * ROW_PITCH);
-    });
-    const height = heights.reduce((sum, h) => sum + h + 72, 0);
-    return Math.abs(Math.log((Math.max(...widths) + 72) / height / target));
+  const attached = counts.some(rows => rows > 0);
+  if (!(target > 0)) return { bands: 1, poolColumns: Math.ceil(Math.sqrt(pooled)) };
+  const score = (bands, columns) => {
+    let width = 0, height = 0;
+    if (attached) {
+      const widths = new Array(bands).fill(0), heights = new Array(bands).fill(0);
+      counts.forEach((rows, column) => {
+        const b = bandOf(column, bands, counts.length);
+        widths[b] += NODE_W + MIN_GAP;
+        heights[b] = Math.max(heights[b], rows * ROW_PITCH);
+      });
+      width = Math.max(...widths);
+      height = heights.reduce((sum, h) => sum + h + 72, 0);
+    }
+    if (columns) {
+      width += columns * (NODE_W + POOL_GAP) + (attached ? POOL_SPLIT : 0);
+      height = Math.max(height, Math.ceil(pooled / columns) * ROW_PITCH + 72);
+    }
+    return Math.abs(Math.log((width + 72) / height / target));
   };
-  if (score(1) < Math.log(1.35)) return 1;
-  let best = 1;
-  for (let bands = 2; bands <= counts.length; bands++) if (score(bands) < score(best) - 0.01) best = bands;
-  return best;
+  const shape = bands => {
+    let columns = pooled ? 1 : 0;
+    for (let next = 2; next <= pooled; next++) if (score(bands, next) < score(bands, columns) - 0.01) columns = next;
+    return { bands, poolColumns: columns, score: score(bands, columns) };
+  };
+  let best = shape(1);
+  if (attached && best.score >= Math.log(1.35)) for (let bands = 2; bands <= counts.length; bands++) {
+    const next = shape(bands);
+    if (next.score < best.score - 0.01) best = next;
+  }
+  return { bands: best.bands, poolColumns: best.poolColumns };
 }
 const statusLabel = status => ({ in_progress: 'In progress', partially_implemented: 'Partially implemented' })[status] || status.charAt(0).toUpperCase() + status.slice(1);
 const nodeStatusLabel = status => status === 'partially_implemented' ? 'Partial' : statusLabel(status);
@@ -580,7 +774,33 @@ function availableTickets() {
     && (showClosedEpics || !isClosed(map.get(t.parent)?.status)));
 }
 function visibleTickets() {
-  return availableTickets().filter(t => !epicFilter || t.parent === epicFilter);
+  return availableTickets().filter(t => (!epicFilter || t.parent === epicFilter)
+    && (assigneeFilter === null || assignee(t) === assigneeFilter));
+}
+// One prompt for a single agent covering every listed ticket, with each
+// ticket after the listed tickets it depends on. With full set, the text of
+// each ticket follows the summary, for agents that cannot read the files.
+function batchPrompt(list, project, full) {
+  const map = new Map(list.map(t => [t.id, t])), ordered = [], seen = new Set();
+  const visit = t => {
+    if (seen.has(t.id)) return;
+    seen.add(t.id);
+    for (const dep of t.deps) if (map.has(dep)) visit(map.get(dep));
+    ordered.push(t);
+  };
+  [...list].sort((a, b) => a.id.localeCompare(b.id)).forEach(visit);
+  const lines = ordered.map(t => {
+    const deps = t.deps.filter(dep => map.has(dep));
+    return `- ${t.id}: ${t.title}` + (deps.length ? ` (after ${deps.join(', ')})` : '');
+  });
+  if (full) {
+    const name = project.replace(/\/+$/, '').split('/').pop();
+    const texts = ordered.map(t => `<ticket id="${t.id}">\n---\n${Object.entries(t.metadata).map(([key, value]) => `${key}: ${value}\n`).join('')}---\n${t.body}\n</ticket>`);
+    const one = lines.length === 1;
+    return `Use $ticket-fan-out to execute ${one ? 'this ticket' : `these ${lines.length} tickets`} in ${name}${one ? '' : ', in the order listed'}:\n\n${lines.join('\n')}\n\nThe full text of ${one ? 'the ticket' : 'each ticket'} is below; the .tickets/ files may not be available. ${one ? 'Follow' : 'For each ticket, follow'} its dependencies and acceptance criteria, and verify the result${one ? '' : ' before starting the next'}.\n\n${texts.join('\n\n')}\n`;
+  }
+  if (lines.length === 1) return `Use $ticket-fan-out to execute ticket ${ordered[0].id} in ${project}. Read .tickets/${ordered[0].id}.md, follow its dependencies and acceptance criteria, and verify the result.`;
+  return `Use $ticket-fan-out to execute these ${lines.length} tickets in ${project}, in the order listed:\n\n${lines.join('\n')}\n\nFor each ticket, read .tickets/<id>.md, follow its dependencies and acceptance criteria, and verify the result before starting the next.`;
 }
 const nodeId = id => 'ticket-' + CSS.escape(id);
 function group(t) { return t.parent || ''; }
@@ -621,13 +841,18 @@ function updateLegend() {
 function updateAssigneeLegend() {
   const host = document.querySelector('#assignee-legend');
   host.replaceChildren();
-  const names = [...new Set(tickets.filter(t => t.type !== 'epic').map(assignee))].sort((a, b) => a.localeCompare(b));
+  const names = [...new Set(availableTickets().map(assignee))].sort((a, b) => a.localeCompare(b));
+  if (names.length < 2 || !names.includes(assigneeFilter)) assigneeFilter = null;
   if (!names.length) return;
   host.append(Object.assign(document.createElement('span'), { className: 'assignee-legend-label', textContent: 'Assignees' }));
   for (const name of names) {
-    const key = document.createElement('span');
+    const key = document.createElement('button');
     key.className = 'assignee-key';
+    key.type = 'button';
+    key.disabled = names.length < 2;
     key.title = name || 'Unassigned';
+    key.setAttribute('aria-pressed', String(assigneeFilter === name));
+    key.addEventListener('click', () => { assigneeFilter = assigneeFilter === name ? null : name; render(); fit(); });
     key.append(avatar(name), Object.assign(document.createElement('span'), { className: 'assignee-key-name', textContent: name || 'Unassigned' }));
     host.append(key);
   }
@@ -687,7 +912,11 @@ function layout() {
     levels.set(id, value);
     return value;
   }
-  for (const t of visible) level(t.id);
+  // Tickets with no visible dependency or dependent go to the pool.
+  const depended = new Set(visible.flatMap(t => t.deps));
+  const pooled = visible.filter(t => !depended.has(t.id) && !t.deps.some(dep => map.has(dep)));
+  const attached = visible.filter(t => !pooled.includes(t));
+  for (const t of attached) level(t.id);
   const links = visible.flatMap(t => t.deps.filter(dep => map.has(dep))
     .map(dep => ({ from: dep, to: t.id, start: levels.get(dep), end: levels.get(t.id) })))
     .filter(link => link.start < link.end)
@@ -701,11 +930,12 @@ function layout() {
   }
   const maxLevel = Math.max(0, ...levels.values());
   rowCounts = new Array(maxLevel + 1).fill(0);
-  for (const t of visible) rowCounts[levels.get(t.id)]++;
-  bandCount = chooseBandCount(rowCounts);
+  for (const t of attached) rowCounts[levels.get(t.id)]++;
+  pooledCount = pooled.length;
+  ({ bands: bandCount, poolColumns } = chooseShape(rowCounts, pooledCount));
   const band = column => bandOf(column, bandCount, maxLevel + 1);
   const columns = Array.from({ length: maxLevel + 1 }, () => []);
-  for (const t of visible) columns[levels.get(t.id)].push(t.id);
+  for (const t of attached) columns[levels.get(t.id)].push(t.id);
   improveNodeOrder(columns, links, levels, band);
   const lastBand = band(maxLevel);
   // Links between bands leave through the gap right of their source column,
@@ -746,7 +976,11 @@ function layout() {
   }
   margin.sort((a, b) => a.start - b.start || a.end - b.end);
   for (const [id, list] of incoming) incoming.set(id, list.filter(link => link.lead === link));
-  const left = 36 + (margin.length ? margin.length * 10 + 20 : 0);
+  // The pool fills a grid row by row. A divider separates it from the
+  // dependency columns, which start at origin.
+  const poolWidth = poolColumns * (NODE_W + POOL_GAP) - POOL_GAP;
+  const origin = 36 + (pooled.length && attached.length ? poolWidth + POOL_SPLIT : 0);
+  const left = origin + (margin.length ? margin.length * 10 + 20 : 0);
   const columnX = [], gapWidths = [];
   for (let column = 0; column <= maxLevel; column++) {
     columnX.push(column && band(column) === band(column - 1) ? columnX[column - 1] + NODE_W + gapWidths[column - 1] : left);
@@ -761,6 +995,10 @@ function layout() {
     rows.set(column, ids.length);
     ids.forEach((id, row) => positions.set(id, { x: columnX[column], y: bandTop[band(column)] + row * ROW_PITCH }));
   });
+  pooled.forEach((t, index) => positions.set(t.id, {
+    x: 36 + (index % poolColumns) * (NODE_W + POOL_GAP),
+    y: 36 + Math.floor(index / poolColumns) * ROW_PITCH,
+  }));
   const width = Math.max(400, ...[...positions.values()].map(p => p.x + NODE_W + 36));
   const nodeBottom = Math.max(0, ...[...positions.values()].map(p => p.y + NODE_H));
   const height = Math.max(250, nodeBottom + 36);
@@ -785,6 +1023,15 @@ function layout() {
   marker.append(tip);
   defs.append(marker);
   edges.append(defs);
+  if (origin > 36) {
+    const divider = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    divider.classList.add('pool-divider');
+    divider.setAttribute('x1', origin - POOL_SPLIT / 2);
+    divider.setAttribute('x2', origin - POOL_SPLIT / 2);
+    divider.setAttribute('y1', 24);
+    divider.setAttribute('y2', height - 24);
+    edges.append(divider);
+  }
   graph.querySelectorAll('.node, .empty-graph').forEach(n => n.remove());
   for (const t of visible) {
     const p = positions.get(t.id);
@@ -858,7 +1105,7 @@ function layout() {
     if (link.cross) {
       const from = band(link.start), to = band(link.end), lead = link.lead;
       const corridor = b => bandBottom(b) + 28 + corridors.get(b).indexOf(lead) * 6;
-      const below = corridor(from), marginX = 36 + 12 + margin.indexOf(lead) * 10;
+      const below = corridor(from), marginX = origin + 12 + margin.indexOf(lead) * 10;
       if (!link.direct) return [...start, [exit, y1], [exit, below], [marginX, below], [marginX, y2], ...finish];
       const entry = channel(link.end - 1, lead);
       if (!link.margin) return [...start, [exit, y1], [exit, below], [entry, below], [entry, y2], ...finish];
@@ -1038,96 +1285,283 @@ function appendLinkedText(host, value) {
   }
   host.append(document.createTextNode(value.slice(end)));
 }
+// Links in rendered Markdown resolve against markdownContext: `base` is the
+// folder of the document being rendered, `open` shows another Markdown file,
+// and `anchor` scrolls to a heading in the same document.
+let markdownContext = null;
+function normalizePath(value) {
+  const parts = [];
+  for (const part of value.split('/')) {
+    if (!part || part === '.') continue;
+    if (part !== '..') parts.push(part);
+    else if (!parts.length) return null;
+    else parts.pop();
+  }
+  return parts.join('/');
+}
+// Returns the project-relative path and fragment for a relative link, or null
+// when the link is a URL or leaves the project.
+function resolveDocLink(base, href) {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
+  const [target, fragment = ''] = href.split('#');
+  let decoded = target.split('?')[0];
+  try { decoded = decodeURIComponent(decoded); } catch {}
+  const path = normalizePath(decoded.startsWith('/') ? decoded : base + '/' + decoded);
+  return path ? { path, fragment } : null;
+}
+function headingSlug(text, used) {
+  const slug = text.toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s+/g, '-') || 'section';
+  const count = used.get(slug) || 0;
+  used.set(slug, count + 1);
+  return 'doc-' + slug + (count ? '-' + count : '');
+}
+function splitTableRow(line) {
+  const text = line.trim().replace(/^\|/, '').replace(/([^\\])\|$/, '$1');
+  const cells = [];
+  let cell = '', code = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '\\' && text[i + 1] === '|') { cell += '|'; i++; }
+    else if (char === '|' && !code) { cells.push(cell.trim()); cell = ''; }
+    else { if (char === '\x60') code = !code; cell += char; }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+function linkElement(label, href) {
+  let element;
+  const context = markdownContext || {};
+  const target = resolveDocLink(context.base || '', href);
+  if (/^(https?:\/\/|mailto:)/i.test(href)) {
+    element = document.createElement('a');
+    element.href = href;
+    element.target = '_blank';
+    element.rel = 'noopener noreferrer';
+  } else if (href.startsWith('#') && context.anchor) {
+    element = document.createElement('a');
+    element.href = href;
+    element.addEventListener('click', event => { event.preventDefault(); context.anchor(href.slice(1)); });
+  } else if (target && context.open && /\.md$/i.test(target.path)) {
+    element = document.createElement('a');
+    element.href = context.href(target.path);
+    element.title = target.path;
+    element.addEventListener('click', event => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+      event.preventDefault();
+      context.open(target.path, target.fragment);
+    });
+  } else {
+    element = document.createElement('span');
+    element.className = 'file-ref';
+    element.title = target ? target.path : href;
+  }
+  appendInline(element, label);
+  return element;
+}
 function appendInline(host, value) {
-  const pattern = /(\x60[^\x60]+\x60|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
+  const pattern = /(\x60[^\x60]+\x60|!?\[[^\]]+\]\([^)\s]+(?:\s+"[^"]*")?\)|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*\s][^*]*\*|(?<![\w\\])_[^_\s][^_]*_(?!\w))/g;
+  const plain = text => appendLinkedText(host, text.replace(/\\([\\*_\x60\[\]()#+.!|~>-])/g, '$1'));
   let end = 0;
   for (const match of value.matchAll(pattern)) {
-    appendLinkedText(host, value.slice(end, match.index));
+    plain(value.slice(end, match.index));
     const token = match[0];
     let element;
     if (token.startsWith('\x60')) {
       element = document.createElement('code');
       element.textContent = token.slice(1, -1);
-    } else if (token.startsWith('**')) {
+    } else if (token.startsWith('**') || token.startsWith('__')) {
       element = document.createElement('strong');
-      appendLinkedText(element, token.slice(2, -2));
-    } else if (token.startsWith('*')) {
+      appendInline(element, token.slice(2, -2));
+    } else if (token.startsWith('~~')) {
+      element = document.createElement('del');
+      appendInline(element, token.slice(2, -2));
+    } else if (token.startsWith('*') || token.startsWith('_')) {
       element = document.createElement('em');
-      appendLinkedText(element, token.slice(1, -1));
+      appendInline(element, token.slice(1, -1));
     } else {
-      const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
-      if (/^https?:\/\//.test(link[2])) {
-        element = document.createElement('a');
-        element.href = link[2];
-        element.target = '_blank';
-        element.rel = 'noopener noreferrer';
-        element.textContent = link[1];
+      const link = /^(!?)\[([^\]]+)\]\(([^)\s]+)/.exec(token);
+      if (link[1]) {
+        element = document.createElement('span');
+        element.className = 'file-ref';
+        element.title = link[3];
+        element.textContent = 'Image: ' + link[2];
       } else {
-        element = document.createTextNode(token);
+        element = linkElement(link[2], link[3]);
       }
     }
     host.append(element);
     end = match.index + token.length;
   }
-  appendLinkedText(host, value.slice(end));
+  plain(value.slice(end));
 }
-function renderMarkdown(value) {
-  const host = document.querySelector('#body');
-  host.replaceChildren();
-  const lines = value.replace(/\r\n/g, '\n').split('\n');
-  if (lines[0]?.startsWith('# ')) lines.shift();
-  const block = line => /^(#{1,6} |[-*+] |\d+\. |> |\x60{3})/.test(line);
+const listItem = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+const tableRule = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const fenceStart = /^(\s*)(\x60{3,}|~{3,})\s*([\w+-]*)/;
+const ruleLine = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
+const quoteLine = /^\s{0,3}>/;
+const indentOf = line => /^\s*/.exec(line)[0].length;
+function codeBlock(lines, start) {
+  const fence = fenceStart.exec(lines[start]);
+  const code = [];
+  let i = start + 1;
+  while (i < lines.length && !lines[i].trim().startsWith(fence[2])) code.push(lines[i++].replace(new RegExp('^\\s{0,' + fence[1].length + '}'), ''));
+  const pre = document.createElement('pre');
+  const inner = document.createElement('code');
+  inner.textContent = code.join('\n');
+  pre.append(inner);
+  return [pre, Math.min(i + 1, lines.length)];
+}
+function parseList(lines, start) {
+  const first = listItem.exec(lines[start]);
+  const indent = first[1].length, ordered = /\d/.test(first[2]);
+  const list = document.createElement(ordered ? 'ol' : 'ul');
+  if (ordered && parseInt(first[2]) !== 1) list.start = parseInt(first[2]);
+  let i = start;
+  while (i < lines.length) {
+    const marker = listItem.exec(lines[i]);
+    if (!marker || marker[1].length !== indent || /\d/.test(marker[2]) !== ordered) break;
+    const item = document.createElement('li');
+    // The first entry is the item's own text. Later strings are paragraphs.
+    const blocks = [marker[3]];
+    let paragraph = true;
+    i++;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim()) {
+        let next = i + 1;
+        while (next < lines.length && !lines[next].trim()) next++;
+        if (next === lines.length) { i = next; break; }
+        const sibling = listItem.exec(lines[next]);
+        if (indentOf(lines[next]) <= indent && !(sibling && sibling[1].length === indent && /\d/.test(sibling[2]) === ordered)) break;
+        i = next;
+        paragraph = false;
+        continue;
+      }
+      if (indentOf(line) <= indent) break;
+      if (listItem.test(line)) {
+        const [child, next] = parseList(lines, i);
+        blocks.push(child);
+        i = next;
+        paragraph = false;
+      } else if (fenceStart.test(line)) {
+        const [pre, next] = codeBlock(lines, i);
+        blocks.push(pre);
+        i = next;
+        paragraph = false;
+      } else {
+        if (paragraph && typeof blocks.at(-1) === 'string') blocks[blocks.length - 1] += ' ' + line.trim();
+        else blocks.push(line.trim());
+        paragraph = true;
+        i++;
+      }
+    }
+    const task = /^\[([ xX])\]\s+/.exec(blocks[0]);
+    if (task) {
+      item.className = 'task';
+      const box = Object.assign(document.createElement('input'), { type: 'checkbox', checked: task[1] !== ' ', disabled: true });
+      item.append(box);
+      blocks[0] = blocks[0].slice(task[0].length);
+    }
+    blocks.forEach((block, index) => {
+      if (typeof block !== 'string') return item.append(block);
+      const holder = index ? document.createElement('p') : item;
+      appendInline(holder, block);
+      if (index) item.append(holder);
+    });
+    list.append(item);
+  }
+  return [list, i];
+}
+function renderBlocks(host, lines, options, slugs) {
+  const block = line => /^#{1,6}\s/.test(line) || listItem.test(line) || quoteLine.test(line) || fenceStart.test(line) || ruleLine.test(line);
   for (let i = 0; i < lines.length;) {
     const line = lines[i];
     if (!line.trim()) { i++; continue; }
-    if (/^\x60{3}/.test(line)) {
-      const code = [];
-      i++;
-      while (i < lines.length && !/^\x60{3}/.test(lines[i])) code.push(lines[i++]);
-      if (i < lines.length) i++;
-      const pre = document.createElement('pre');
-      const inner = document.createElement('code');
-      inner.textContent = code.join('\n');
-      pre.append(inner);
+    if (fenceStart.test(line)) {
+      const [pre, next] = codeBlock(lines, i);
       host.append(pre);
+      i = next;
       continue;
     }
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    const heading = /^(#{1,6})\s+(.+?)\s*#*$/.exec(line);
     if (heading) {
       const element = document.createElement('h' + Math.min(6, heading[1].length + 1));
       appendInline(element, heading[2]);
+      if (options.ids) element.id = headingSlug(element.textContent, slugs);
       host.append(element);
       i++;
       continue;
     }
-    const list = /^(?:[-*+] |\d+\. )/.exec(line);
-    if (list) {
-      const ordered = /\d/.test(line[0]);
-      const element = document.createElement(ordered ? 'ol' : 'ul');
-      while (i < lines.length && /^(?:[-*+] |\d+\. )/.test(lines[i]) && /\d/.test(lines[i][0]) === ordered) {
-        const item = document.createElement('li');
-        appendInline(item, lines[i].replace(/^(?:[-*+] |\d+\. )/, ''));
-        element.append(item);
-        i++;
-      }
-      host.append(element);
+    if (ruleLine.test(line)) {
+      host.append(document.createElement('hr'));
+      i++;
       continue;
     }
-    if (line.startsWith('> ')) {
+    if (line.includes('|') && i + 1 < lines.length && lines[i + 1].includes('|') && tableRule.test(lines[i + 1])) {
+      const aligns = splitTableRow(lines[i + 1]).map(cell => /^:-+:$/.test(cell) ? 'center' : /-:$/.test(cell) ? 'right' : '');
+      const table = document.createElement('table');
+      const row = (cells, tag) => {
+        const element = document.createElement('tr');
+        aligns.forEach((align, column) => {
+          const cell = document.createElement(tag);
+          if (align) cell.style.textAlign = align;
+          appendInline(cell, cells[column] || '');
+          element.append(cell);
+        });
+        return element;
+      };
+      const head = document.createElement('thead'), body = document.createElement('tbody');
+      head.append(row(splitTableRow(line), 'th'));
+      i += 2;
+      while (i < lines.length && lines[i].trim() && lines[i].includes('|')) body.append(row(splitTableRow(lines[i++]), 'td'));
+      table.append(head, body);
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      wrap.tabIndex = 0;
+      wrap.append(table);
+      host.append(wrap);
+      continue;
+    }
+    if (listItem.test(line)) {
+      const [list, next] = parseList(lines, i);
+      host.append(list);
+      i = next;
+      continue;
+    }
+    if (quoteLine.test(line)) {
       const quote = document.createElement('blockquote');
       const parts = [];
-      while (i < lines.length && lines[i].startsWith('> ')) parts.push(lines[i++].slice(2));
-      appendInline(quote, parts.join(' '));
+      while (i < lines.length && quoteLine.test(lines[i])) parts.push(lines[i++].replace(/^\s{0,3}> ?/, ''));
+      renderBlocks(quote, parts, options, slugs);
       host.append(quote);
       continue;
     }
-    const parts = [line];
+    const parts = [line.trim()];
     i++;
-    while (i < lines.length && lines[i].trim() && !block(lines[i])) parts.push(lines[i++]);
+    const table = at => lines[at].includes('|') && at + 1 < lines.length && lines[at + 1].includes('|') && tableRule.test(lines[at + 1]);
+    while (i < lines.length && lines[i].trim() && !block(lines[i]) && !table(i)) parts.push(lines[i++].trim());
     const paragraph = document.createElement('p');
     appendInline(paragraph, parts.join(' '));
     host.append(paragraph);
   }
+}
+// Options: `base`, `open`, `href` and `anchor` make relative links work (see
+// markdownContext), `ids` gives headings link targets, and `keepTitle` keeps a
+// leading level-one heading.
+function renderMarkdownInto(host, value, options = {}) {
+  host.replaceChildren();
+  const lines = value.replace(/\r\n?/g, '\n').replace(/^\t+/gm, tabs => '    '.repeat(tabs.length)).split('\n');
+  if (options.ids && lines[0] === '---') {
+    const end = lines.indexOf('---', 1);
+    if (end > 0) lines.splice(0, end + 1);
+  }
+  const first = lines.findIndex(line => line.trim());
+  if (!options.keepTitle && first >= 0 && lines[first].startsWith('# ')) lines.splice(0, first + 1);
+  markdownContext = options;
+  try { renderBlocks(host, lines, options, new Map()); } finally { markdownContext = null; }
+}
+function renderMarkdown(value) {
+  renderMarkdownInto(document.querySelector('#body'), value, { base: '.tickets' });
 }
 let tooltipIndex = 0, detailSignature = '';
 function flash(button, message) {
@@ -1261,7 +1695,9 @@ let resizeTimer;
 function relayoutForViewport() {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (activeTab !== 'tickets' || !rowCounts.length || chooseBandCount(rowCounts) === bandCount) return;
+    if (activeTab !== 'tickets' || !rowCounts.length) return;
+    const shape = chooseShape(rowCounts, pooledCount);
+    if (shape.bands === bandCount && shape.poolColumns === poolColumns) return;
     layout();
     updateNodes();
     updateSelection();
@@ -1283,6 +1719,12 @@ function render() {
   updateNodes();
   updateSelection();
   if (!fitted && visible.length) { fitted = true; fit(); }
+  const copyVisible = document.querySelector('#copy-visible');
+  copyVisible.disabled = !visible.length;
+  const copyFull = document.querySelector('#copy-full');
+  copyFull.disabled = !visible.length;
+  copyFull.title = visible.length ? 'Copy the same prompt followed by the full text of ' + (visible.length === 1 ? 'the visible ticket' : 'all ' + visible.length + ' visible tickets') : 'No tickets to copy';
+  copyVisible.title = visible.length ? `Copy one prompt that lists ${visible.length === 1 ? 'the visible ticket' : 'all ' + visible.length + ' visible tickets'}` : 'No tickets to copy';
   document.querySelector('#count').textContent = visible.length + ' / ' + tickets.filter(t => t.type !== 'epic').length + ' tickets';
 }
 document.querySelector('#show-closed').addEventListener('change', event => {
@@ -1298,41 +1740,634 @@ document.querySelector('#show-closed-epics').addEventListener('change', event =>
   showClosedEpics = event.target.checked;
   render();
 });
-function renderInitiatives() {
-  const onlyUnstarted = document.querySelector('#unstarted-only').checked;
-  const visible = initiatives.filter(item => !onlyUnstarted || item.status === 'No recorded start');
-  document.querySelector('#initiative-count').textContent = `(${visible.length} / ${initiatives.length})`;
-  const signature = JSON.stringify([onlyUnstarted, initiatives]);
-  if (signature === initiativeSignature) return;
-  initiativeSignature = signature;
-  const list = document.querySelector('#initiative-list');
-  const expanded = new Set([...list.querySelectorAll('details[open]')].map(item => item.dataset.path));
-  list.replaceChildren();
-  const element = (tag, text, className = '') => Object.assign(document.createElement(tag), { textContent: text, className });
-  for (const item of visible) {
-    const card = element('article', '', 'initiative');
-    const info = item.map.initiative;
-    const implementation = item.map.implementation || {};
-    card.append(element('h3', info.title), element('p', item.status, 'initiative-state'), element('p', info.summary || ''));
-    card.append(element('p', `Phase: ${info.current_phase || 'unknown'} · Planning: ${implementation.status || 'unknown'} · Updated: ${info.last_updated || 'unknown'}`, 'initiative-info'));
-    card.append(element('p', item.evidence, 'initiative-info'), element('p', item.path, 'initiative-path'));
-    const milestones = implementation.milestones || [];
-    if (milestones.length) {
-      const rows = element('ul', '');
-      for (const milestone of milestones) rows.append(element('li', `${milestone.title || milestone.outcome || milestone.id}: ${milestone.status || 'No state recorded'}`));
-      card.append(rows);
-    }
-    const details = element('details', '');
-    details.dataset.path = item.path;
-    details.open = expanded.has(item.path);
-    details.append(element('summary', 'View initiative-map.json'), element('pre', JSON.stringify(item.map, null, 2)));
-    card.append(details);
-    list.append(card);
-  }
-  if (!visible.length) list.append(element('p', initiatives.length ? 'No initiatives match this filter. Clear the filter to see all initiatives.' : 'No initiative-map.json files found in this project.'));
+// The tab, initiative, document and list filters live in the URL fragment, so
+// a refresh or a shared link returns to the same place. `choice` is the
+// initiative's folder, or null until one is picked. `doc` is a project path,
+// 'map', or '' for the initiative's first document.
+function parseViewState(hash) {
+  const params = new URLSearchParams(hash.replace(/^#/, ''));
+  const folder = params.get('i'), doc = params.get('d') || '';
+  const base = !folder || folder === '.' ? '' : folder + '/';
+  return {
+    tab: params.get('view') === 'initiatives' ? 'initiatives' : 'tickets',
+    choice: folder === null ? null : folder === '.' ? '' : folder,
+    doc: folder === null || !doc ? '' : doc === 'map' ? 'map' : doc.startsWith('/') ? doc.slice(1) : base + doc,
+    show: ['unstarted', 'started', 'complete', 'all'].includes(params.get('show')) ? params.get('show') : '',
+    query: params.get('q') || '',
+  };
 }
-function switchTab(name) {
+function formatViewState(state) {
+  const pairs = [];
+  if (state.tab === 'initiatives') pairs.push(['view', 'initiatives']);
+  if (state.choice !== null) {
+    const base = state.choice ? state.choice + '/' : '';
+    pairs.push(['i', state.choice || '.']);
+    if (state.doc === 'map') pairs.push(['d', 'map']);
+    else if (state.doc) pairs.push(['d', !base ? state.doc : state.doc.startsWith(base) ? state.doc.slice(base.length) : '/' + state.doc]);
+  }
+  if (state.show) pairs.push(['show', state.show]);
+  if (state.query) pairs.push(['q', state.query]);
+  return pairs.length ? '#' + pairs.map(([key, value]) => key + '=' + encodeURIComponent(value).replace(/%2F/g, '/')).join('&') : '';
+}
+// Returns the merged [start, end) ranges of `text` that match any search term.
+function matchRanges(text, terms) {
+  const lower = text.toLowerCase(), ranges = [];
+  for (const term of terms) {
+    for (let at = lower.indexOf(term); term && at >= 0; at = lower.indexOf(term, at + term.length)) ranges.push([at, at + term.length]);
+  }
+  ranges.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const merged = [];
+  for (const range of ranges) {
+    if (merged.length && range[0] <= merged.at(-1)[1]) merged.at(-1)[1] = Math.max(merged.at(-1)[1], range[1]);
+    else merged.push(range);
+  }
+  return merged;
+}
+const humanize = key => {
+  const text = String(key).replace(/[_-]+/g, ' ').trim();
+  return text.charAt(0).toUpperCase() + text.slice(1);
+};
+function shortDate(value) {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(typeof value === 'string' ? value : '');
+  if (!parts) return typeof value === 'string' ? value : '';
+  return new Date(+parts[1], parts[2] - 1, +parts[3]).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+const initiativesPanel = document.querySelector('#initiatives-panel');
+const initiativeList = document.querySelector('#initiative-list');
+const initiativeDetail = document.querySelector('#initiative-detail');
+const initiativeSearch = document.querySelector('#initiative-search');
+let initiativeChoice = null, initiativeDoc = '', initiativeShow = '', initiativeQuery = '';
+let initiativeListSignature = '', initiativeDetailSignature = '', detailKey = '', pendingAnchor = '', loaded = false;
+let savedScroll = null;
+try { savedScroll = JSON.parse(sessionStorage.getItem('tk-view-scroll')); } catch {}
+const docCache = new Map(), docPending = new Set();
+const workStates = { 'No recorded start': 'unstarted', Started: 'started', Complete: 'complete' };
+function make(tag, className = '', text = '') {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== '') element.textContent = text;
+  return element;
+}
+const viewState = () => ({ tab: activeTab, choice: initiativeChoice, doc: initiativeDoc, show: initiativeShow, query: initiativeQuery });
+function writeViewState(push) {
+  const hash = formatViewState(viewState());
+  if (hash === location.hash) return;
+  history[push ? 'pushState' : 'replaceState'](null, '', hash || location.pathname + location.search);
+}
+const initiativeFolder = item => item.path.replace(/\/?initiative-map\.json$/, '');
+const effectiveShow = () => initiativeShow || (initiatives.some(item => item.status === 'No recorded start') ? 'unstarted' : 'all');
+const searchTerms = () => initiativeQuery.toLowerCase().split(/\s+/).filter(Boolean);
+function highlighted(className, text) {
+  const element = make('span', className);
+  let end = 0;
+  for (const [from, to] of matchRanges(text, searchTerms())) {
+    element.append(text.slice(end, from), make('mark', '', text.slice(from, to)));
+    end = to;
+  }
+  element.append(text.slice(end));
+  return element;
+}
+function matchingInitiatives() {
+  const terms = searchTerms();
+  if (!terms.length) return initiatives;
+  return initiatives.filter(item => {
+    const info = item.map.initiative;
+    const text = [info.title, info.summary, item.path, ...(item.map.intent?.themes || []).filter(theme => typeof theme === 'string')].join(' ').toLowerCase();
+    return terms.every(term => text.includes(term));
+  });
+}
+function visibleInitiatives() {
+  const show = effectiveShow();
+  return matchingInitiatives().filter(item => show === 'all' || workStates[item.status] === show);
+}
+function selectedInitiative() {
+  return initiatives.find(item => initiativeFolder(item) === initiativeChoice) || visibleInitiatives()[0] || null;
+}
+const currentDoc = item => initiativeDoc || item.documents[0]?.path || 'map';
+function workStatus(item) {
+  const state = workStates[item.status];
+  const element = make('span', 'status', item.status);
+  element.dataset.status = state === 'started' ? 'in_progress' : state === 'complete' ? 'closed' : 'open';
+  return element;
+}
+// Keep the kind of document open when moving between initiatives: a reader
+// comparing shape briefs stays on the shape brief.
+function pickInitiative(path) {
+  const item = initiatives.find(entry => entry.path === path);
+  if (!item) return;
+  const previous = selectedInitiative();
+  const doc = previous ? currentDoc(previous) : '';
+  const role = previous?.documents.find(entry => entry.path === doc)?.role;
+  initiativeDoc = doc === 'map' ? 'map' : (role && item.documents.find(entry => entry.role === role)?.path) || '';
+  initiativeChoice = initiativeFolder(item);
+  writeViewState(true);
+  renderInitiatives();
+}
+function openDoc(path, fragment = '') {
+  const item = selectedInitiative();
+  if (!item) return;
+  initiativeChoice = initiativeFolder(item);
+  initiativeDoc = path;
+  pendingAnchor = fragment;
+  writeViewState(true);
+  renderInitiatives();
+}
+function loadDoc(path, version) {
+  const key = path + '\n' + version;
+  if (docCache.get(path)?.version === version || docPending.has(key)) return;
+  docPending.add(key);
+  fetch('/api/doc?path=' + encodeURIComponent(path), { cache: 'no-store' })
+    .then(async response => {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Read failed (' + response.status + ')');
+      docCache.set(path, { version, text: data.text });
+    })
+    .catch(error => docCache.set(path, { version, error: error.message }))
+    .finally(() => { docPending.delete(key); renderInitiativeDetail(); });
+}
+function scrollToHeading(fragment) {
+  const heading = document.getElementById('doc-' + fragment.replace(/^doc-/, '').toLowerCase());
+  if (heading && initiativeDetail.contains(heading)) heading.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+}
+function initiativePrompt(item, doc) {
+  const lines = [
+    `Use $software-design-sleuth-full to review and update the initiative "${item.map.initiative.title}".`,
+    '',
+    'Initiative folder: ' + [project, initiativeFolder(item)].filter(Boolean).join('/'),
+    'Initiative map: ' + project + '/' + item.path,
+  ];
+  if (doc !== 'map') lines.push('Document I am reading: ' + project + '/' + doc);
+  lines.push('', 'Read the map and its documents first. Then apply my comments below, and keep the map and the documents consistent with each other.', '', 'Comments:', '- ');
+  return lines.join('\n');
+}
+function renderInitiativeList() {
+  const show = effectiveShow(), matching = matchingInitiatives(), visible = visibleInitiatives(), current = selectedInitiative();
+  for (const button of document.querySelectorAll('#initiative-show button')) {
+    const key = button.dataset.show;
+    button.setAttribute('aria-pressed', String(key === show));
+    button.querySelector('span').textContent = matching.filter(item => key === 'all' || workStates[item.status] === key).length;
+  }
+  const signature = JSON.stringify([show, initiativeQuery, current?.path, initiatives.length, visible.map(item => [item.path, item.status, item.map.initiative])]);
+  if (signature === initiativeListSignature) return;
+  const first = !initiativeListSignature;
+  initiativeListSignature = signature;
+  const focused = initiativeList.contains(document.activeElement);
+  const top = initiativeList.scrollTop;
+  initiativeList.replaceChildren();
+  for (const item of visible) {
+    const info = item.map.initiative;
+    const button = make('button', 'inav-item');
+    button.type = 'button';
+    button.dataset.path = item.path;
+    if (item === current) button.setAttribute('aria-current', 'true');
+    button.append(highlighted('inav-title', info.title));
+    if (info.summary) button.append(highlighted('inav-summary', info.summary));
+    const meta = make('span', 'inav-meta');
+    meta.append(workStatus(item));
+    if (info.current_phase) meta.append(make('span', '', humanize(info.current_phase) + ' phase'));
+    if (info.last_updated) meta.append(make('span', '', shortDate(info.last_updated)));
+    button.append(meta);
+    button.addEventListener('click', () => pickInitiative(item.path));
+    const row = make('li');
+    row.append(button);
+    initiativeList.append(row);
+  }
+  if (!visible.length) {
+    const empty = make('li', 'inav-empty');
+    if (!initiatives.length) empty.textContent = 'This project has no initiative-map.json files.';
+    else {
+      const reset = make('button', '', 'Show all initiatives');
+      reset.type = 'button';
+      reset.addEventListener('click', () => {
+        initiativeShow = 'all';
+        initiativeQuery = initiativeSearch.value = '';
+        writeViewState(false);
+        renderInitiatives();
+      });
+      empty.append('Nothing matches this search and filter. ', reset);
+    }
+    initiativeList.append(empty);
+  }
+  initiativeList.scrollTop = top;
+  const active = initiativeList.querySelector('[aria-current="true"]');
+  if (focused) (active || initiativeList.querySelector('button'))?.focus();
+  else if (first) active?.scrollIntoView({ block: 'nearest' });
+}
+const codeKeys = new Set(['command', 'test_commands', 'revision', 'root', 'path']);
+const entryTitles = ['title', 'name', 'question', 'statement', 'outcome', 'event', 'change', 'summary', 'topic', 'text', 'premise', 'action', 'location'];
+const entryTags = ['status', 'type', 'kind', 'commitment', 'importance', 'time_horizon', 'authority', 'phase'];
+const markStates = { complete: 'closed', completed: 'closed', done: 'closed', closed: 'closed', in_progress: 'in_progress', 'in-progress': 'in_progress', started: 'in_progress', planned: 'open', open: 'open' };
+// Draws any value from an initiative map, so fields this page has no special
+// layout for still appear. `compact` joins short lists onto one line.
+function valueNode(value, compact = false, key = '') {
+  if (value === null || value === undefined || value === '') return null;
+  if (Array.isArray(value)) {
+    if (!value.length) return null;
+    if (value.every(entry => entry && typeof entry === 'object' && !Array.isArray(entry))) return entryList(value);
+    if (compact && value.every(entry => typeof entry !== 'object' && String(entry).length <= 48)) {
+      const line = make('span');
+      value.forEach((entry, index) => line.append(index ? ', ' : '', valueNode(entry, true, key) || ''));
+      return line;
+    }
+    const list = make('ul', 'map-list');
+    for (const entry of value) {
+      const node = valueNode(entry, compact, key);
+      if (!node) continue;
+      const row = make('li');
+      row.append(node);
+      list.append(row);
+    }
+    return list.children.length ? list : null;
+  }
+  if (typeof value === 'object') {
+    const rows = make('dl', 'map-rows');
+    for (const [name, entry] of Object.entries(value)) {
+      const node = valueNode(entry, true, name);
+      if (!node) continue;
+      const cell = make('dd');
+      cell.append(node);
+      rows.append(make('dt', '', humanize(name)), cell);
+    }
+    return rows.children.length ? rows : null;
+  }
+  if (typeof value === 'boolean') return make('span', '', value ? 'Yes' : 'No');
+  if (codeKeys.has(key)) return make('code', '', String(value));
+  const text = make('span');
+  appendInline(text, String(value));
+  return text;
+}
+function entryList(items, { titles = entryTitles, idKey = 'id' } = {}) {
+  const list = make('ul', 'entries' + (idKey === 'date' ? ' dated' : ''));
+  for (const entry of items) {
+    const row = make('li', 'entry');
+    const used = new Set([idKey]);
+    if (['string', 'number'].includes(typeof entry[idKey])) row.append(make('span', 'entry-id', idKey === 'date' ? shortDate(entry[idKey]) : String(entry[idKey])));
+    if (typeof entry.status === 'string') row.dataset.state = entry.status;
+    const main = make('div', 'entry-main');
+    const titleKey = titles.find(name => typeof entry[name] === 'string' && entry[name]);
+    if (titleKey) {
+      used.add(titleKey);
+      const title = make('div', 'entry-title');
+      appendInline(title, entry[titleKey]);
+      main.append(title);
+    }
+    const tags = make('div', 'entry-tags');
+    for (const name of entryTags) {
+      if (typeof entry[name] !== 'string' || !entry[name] || used.has(name)) continue;
+      used.add(name);
+      const tag = make('span', name === 'status' && markStates[entry[name]] ? 'status' : '', humanize(entry[name]));
+      if (tag.className) tag.dataset.status = markStates[entry[name]];
+      tag.title = humanize(name);
+      tags.append(tag);
+    }
+    if (tags.children.length) main.append(tags);
+    const more = valueNode(Object.fromEntries(Object.entries(entry).filter(([name]) => !used.has(name))), true);
+    if (more && more.children.length > 6) {
+      const details = make('details', 'entry-more');
+      details.append(make('summary', '', 'Details'), more);
+      main.append(details);
+    } else if (more) main.append(more);
+    row.append(main);
+    list.append(row);
+  }
+  return list;
+}
+// Lays out one object from the map. `spec` lists known fields in reading
+// order as [key, kind, label]; every other field follows in a generic layout.
+// Kinds: 'lead' is a paragraph, 'row' a labelled row, 'list' a bulleted
+// column, and 'full' a labelled block across the page.
+function mapFields(section, source, spec, skip = []) {
+  if (!source || typeof source !== 'object') return;
+  const used = new Set(skip);
+  let rows = null, grid = null;
+  const add = (key, kind, label = humanize(key)) => {
+    if (used.has(key)) return;
+    used.add(key);
+    const value = source[key];
+    const simple = Array.isArray(value) && value.every(entry => typeof entry !== 'object');
+    if (kind === 'list' && !simple) kind = Array.isArray(value) ? 'full' : 'row';
+    const node = valueNode(value, false, key);
+    if (!node) return;
+    if (kind === 'row') {
+      grid = null;
+      rows ||= section.appendChild(make('dl', 'map-rows'));
+      const cell = make('dd');
+      cell.append(node);
+      rows.append(make('dt', '', label), cell);
+      return;
+    }
+    rows = null;
+    if (kind === 'list') {
+      grid ||= section.appendChild(make('div', 'map-grid'));
+      const block = make('div');
+      block.append(make('h4', '', label), node);
+      grid.append(block);
+      return;
+    }
+    grid = null;
+    if (kind === 'lead') node.classList.add('map-lead');
+    section.append(make('h4', '', label), node);
+  };
+  for (const [key, kind, label] of spec) add(key, kind, label);
+  for (const key of Object.keys(source)) add(key, Array.isArray(source[key]) ? 'list' : 'row');
+}
+function renderMap(host, item, linked) {
+  const data = item.map, info = data.initiative, slugs = new Map();
+  const section = title => {
+    const element = make('section', 'map-section');
+    const heading = make('h3', '', title);
+    heading.id = headingSlug(title, slugs);
+    element.append(heading);
+    return element;
+  };
+  const finish = element => { if (element.children.length > 1) host.append(element); };
+
+  const lifecycle = section('Lifecycle');
+  const stages = make('ol', 'lifecycle');
+  const phase = info.current_phase === 'implementation' ? 'work' : info.current_phase;
+  const stage = (key, label, status, note, state, open) => {
+    const row = make('li');
+    const body = make(open ? 'button' : 'div', 'stage');
+    if (open) { body.type = 'button'; body.addEventListener('click', open); }
+    body.dataset.state = state;
+    body.append(make('span', 'stage-name', label), make('span', 'stage-status', status));
+    if (note) body.append(make('span', 'stage-note', note));
+    if (key === phase) { row.setAttribute('aria-current', 'step'); body.append(make('span', 'stage-now', 'Current phase')); }
+    row.append(body);
+    stages.append(row);
+  };
+  for (const [key, label, role] of [['intent', 'Intent', 'intent_brief'], ['brainstorm', 'Brainstorm', 'brainstorm'], ['shape', 'Shape', 'shape_brief'], ['plan', 'Plan', 'implementation_plan']]) {
+    const artifact = data.artifacts?.[role] || {};
+    const file = item.documents.find(entry => entry.role === role);
+    const status = typeof artifact.status === 'string' ? humanize(artifact.status) : file ? 'Written' : 'Not written';
+    stage(key, label, status, shortDate(artifact.updated_at), !file ? 'none' : artifact.status === 'current' ? 'done' : 'draft', file && (() => openDoc(file.path)));
+  }
+  stage('work', 'Work', item.status, item.evidence, item.status === 'Complete' ? 'done' : item.status === 'Started' ? 'draft' : 'none', null);
+  lifecycle.append(stages);
+  const extra = make('div');
+  mapFields(extra, info, [], ['title', 'slug', 'scale', 'current_phase', 'last_updated', 'summary']);
+  lifecycle.append(...extra.children);
+  host.append(lifecycle);
+
+  const shape = section('Shape');
+  mapFields(shape, data.shape, [['problem', 'lead'], ['recommended_shape', 'lead'], ['appetite', 'row'], ['first_proof', 'row'],
+    ['success_moves', 'list'], ['rabbit_holes', 'list'], ['cut_line', 'list'], ['open_decisions', 'list'], ['proposed_rules', 'list'], ['uncertainties', 'list']], ['status']);
+  finish(shape);
+
+  const plan = section('Plan');
+  const implementation = data.implementation || {};
+  if (implementation.milestones?.length) plan.append(make('h4', '', 'Milestones'), entryList(implementation.milestones, { titles: ['title', 'outcome'] }));
+  if (linked.length) {
+    const list = make('ul', 'entries');
+    for (const ticket of linked) {
+      const row = make('li', 'entry');
+      const id = make('span', 'entry-id');
+      id.append(pill(ticket.id, () => { switchTab('tickets'); openTicket(ticket.id); }, 'Open ticket ' + ticket.id + ': ' + ticket.title, 'Open in the ticket graph'));
+      const main = make('div', 'entry-main');
+      const state = make('span', 'status', statusLabel(ticket.status));
+      state.dataset.status = ticket.status;
+      const tags = make('div', 'entry-tags');
+      tags.append(state);
+      main.append(make('div', 'entry-title', ticket.title), tags);
+      row.append(id, main);
+      list.append(row);
+    }
+    plan.append(make('h4', '', 'Linked tickets'), list);
+  }
+  mapFields(plan, implementation, [['fast_local_loop', 'row'], ['dependencies', 'full'], ['cut_line', 'list'], ['open_decisions', 'list'],
+    ['follow_on_proofs', 'list'], ['follow_ups', 'list'], ['repository_snapshot', 'row']], ['status', 'milestones']);
+  finish(plan);
+
+  const intent = section('Intent');
+  const purpose = data.intent || {};
+  const themes = Array.isArray(purpose.themes) && purpose.themes.length && purpose.themes.every(theme => typeof theme === 'string') ? purpose.themes : null;
+  if (themes) {
+    const chips = make('div', 'chips');
+    for (const theme of themes) chips.append(make('span', '', theme));
+    intent.append(make('h4', '', 'Themes'), chips);
+  }
+  if (Array.isArray(purpose.claims) && purpose.claims.length) intent.append(make('h4', '', 'Claims'), valueNode(purpose.claims));
+  mapFields(intent, purpose, [['human_questions', 'full', 'Open questions'], ['conflicts', 'full']], ['claims', ...(themes ? ['themes'] : [])]);
+  finish(intent);
+
+  const brainstorm = section('Brainstorm');
+  mapFields(brainstorm, data.brainstorm, [['selected_option', 'row'], ['selected_direction', 'row'], ['note', 'row'], ['options', 'full']], ['status', 'requested_count']);
+  finish(brainstorm);
+
+  if (Array.isArray(data.sources) && data.sources.length) {
+    const sources = section('Sources');
+    sources.append(data.sources.every(entry => entry && typeof entry === 'object') ? entryList(data.sources, { titles: ['title', 'location'] }) : valueNode(data.sources));
+    host.append(sources);
+  }
+  if (Array.isArray(data.history) && data.history.length) {
+    const history = section('History');
+    history.append(data.history.every(entry => entry && typeof entry === 'object') ? entryList(data.history, { idKey: 'date' }) : valueNode(data.history));
+    host.append(history);
+  }
+  for (const [key, value] of Object.entries(data)) {
+    if (['schema_version', 'initiative', 'artifacts', 'sources', 'intent', 'brainstorm', 'shape', 'implementation', 'history'].includes(key)) continue;
+    const node = valueNode(value);
+    if (!node) continue;
+    const other = section(humanize(key));
+    other.append(node);
+    host.append(other);
+  }
+  host.append(make('p', 'map-foot', item.path + (typeof data.schema_version === 'string' ? ' · schema ' + data.schema_version : '')));
+}
+function updateOutline() {
+  const links = [...initiativeDetail.querySelectorAll('.outline button')];
+  if (!links.length) return;
+  const limit = initiativeDetail.getBoundingClientRect().top + 96;
+  let active = links[0];
+  for (const link of links) if (document.getElementById(link.dataset.target)?.getBoundingClientRect().top <= limit) active = link;
+  for (const link of links) link.setAttribute('aria-current', String(link === active));
+}
+function renderInitiativeDetail() {
+  initiativesPanel.classList.toggle('detail-open', initiativeChoice !== null);
+  const item = selectedInitiative();
+  if (!item) {
+    if (initiativeDetailSignature === 'empty:' + initiatives.length) return;
+    initiativeDetailSignature = 'empty:' + initiatives.length;
+    detailKey = '';
+    initiativeDetail.replaceChildren(make('p', 'idetail-empty', initiatives.length ? 'No initiative matches this search and filter.' : 'This project has no initiative-map.json files. Create one with the software design sleuth skill and it appears here.'));
+    return;
+  }
+  const doc = currentDoc(item);
+  const listed = item.documents.find(entry => entry.path === doc);
+  if (doc !== 'map') loadDoc(doc, listed ? listed.version : '');
+  const cached = doc === 'map' ? null : docCache.get(doc);
+  const map = byId();
+  const linked = item.tickets.map(id => map.get(id)).filter(Boolean);
+  const signature = JSON.stringify([item, doc, project, cached && [cached.version, cached.error || ''], linked.map(ticket => [ticket.id, ticket.status, ticket.title])]);
+  if (signature === initiativeDetailSignature) return;
+  initiativeDetailSignature = signature;
+  const key = item.path + '|' + doc;
+  const ready = doc === 'map' || !!cached;
+  const entering = key !== detailKey || initiativeDetail.querySelector('.idetail-article[aria-busy]');
+  const top = key === detailKey ? initiativeDetail.scrollTop : 0;
+  const refocus = initiativeDetail.contains(document.activeElement) && document.activeElement.getAttribute('role') === 'tab';
+  detailKey = key;
+  const info = item.map.initiative;
+  const folder = [project, initiativeFolder(item)].filter(Boolean).join('/');
+
+  const head = make('div', 'idetail-head');
+  const back = make('button', 'idetail-back', 'All initiatives');
+  back.type = 'button';
+  back.addEventListener('click', () => { initiativeChoice = null; initiativeDoc = ''; writeViewState(true); renderInitiatives(); });
+  const meta = make('div', 'idetail-meta');
+  meta.append(workStatus(item), make('span', '', item.evidence));
+  for (const text of [info.current_phase && humanize(info.current_phase) + ' phase', info.scale && humanize(info.scale) + ' scale', info.last_updated && 'Updated ' + shortDate(info.last_updated)]) {
+    if (text) meta.append(make('span', '', text));
+  }
+  const prompt = make('button', 'ibutton primary');
+  prompt.type = 'button';
+  prompt.title = 'Copy a prompt that points an agent at this initiative, ready for your comments';
+  prompt.append(make('span', 'label', 'Copy prompt to update'));
+  prompt.addEventListener('click', () => copyText(initiativePrompt(item, doc), prompt));
+  const where = make('button', 'idetail-path');
+  where.type = 'button';
+  where.title = 'Copy ' + folder;
+  where.append(make('span', 'label', (initiativeFolder(item) || '.') + '/'));
+  where.addEventListener('click', () => copyText(folder, where));
+  meta.append(where);
+  const title = make('div', 'idetail-title');
+  title.append(make('h2', '', info.title), prompt);
+  head.append(back, title);
+  if (info.summary) head.append(make('p', 'idetail-summary', info.summary));
+  head.append(meta);
+
+  const tabList = make('div', 'idetail-tabs');
+  tabList.setAttribute('role', 'tablist');
+  tabList.setAttribute('aria-label', 'Initiative documents');
+  const entries = item.documents.map(entry => ({ key: entry.path, label: entry.label, note: entry.status && entry.status !== 'current' ? humanize(entry.status) : '', title: entry.path }));
+  if (doc !== 'map' && !listed) entries.push({ key: doc, label: doc.split('/').pop(), note: 'Linked', title: doc });
+  entries.push({ key: 'map', label: 'Map', note: '', title: 'The initiative map, laid out for reading' });
+  for (const entry of entries) {
+    const tab = make('button', entry.key === 'map' ? 'tab-end' : '', entry.label);
+    tab.type = 'button';
+    tab.title = entry.title;
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(entry.key === doc));
+    tab.tabIndex = entry.key === doc ? 0 : -1;
+    if (entry.note) tab.append(make('span', 'tab-note', entry.note));
+    tab.addEventListener('click', () => openDoc(entry.key));
+    tab.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const index = entries.indexOf(entry);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? entries.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : entries.length - 1)) % entries.length;
+      openDoc(entries[next].key);
+    });
+    tabList.append(tab);
+  }
+
+  const body = make('div', 'idetail-body' + (doc === 'map' ? ' wide' : ''));
+  const article = make('article', 'idetail-article' + (entering && ready ? ' enter' : ''));
+  article.setAttribute('role', 'tabpanel');
+  let headings = 'h3, h4';
+  if (doc === 'map') {
+    article.classList.add('map');
+    renderMap(article, item, linked);
+    headings = '.map-section > h3';
+  } else {
+    const file = make('div', 'doc-file');
+    const path = make('button', 'ibutton path');
+    path.type = 'button';
+    path.title = 'Copy ' + project + '/' + doc;
+    path.append(make('span', 'label', listed ? listed.name : doc));
+    path.addEventListener('click', () => copyText(project + '/' + doc, path));
+    file.append(path);
+    if (listed?.status) file.append(make('span', '', humanize(listed.status)));
+    if (listed?.updated) file.append(make('span', '', 'Updated ' + shortDate(listed.updated)));
+    const content = make('div', 'doc markdown');
+    if (!cached) article.setAttribute('aria-busy', 'true');
+    else if (cached.error) content.append(make('p', 'doc-error', 'Could not read ' + doc + '. ' + cached.error));
+    else if (!cached.text.trim()) content.append(make('p', '', 'This document is empty.'));
+    else renderMarkdownInto(content, cached.text, {
+      ids: true, keepTitle: !listed, base: doc.split('/').slice(0, -1).join('/'),
+      open: openDoc, anchor: scrollToHeading, href: target => formatViewState({ ...viewState(), tab: 'initiatives', choice: initiativeFolder(item), doc: target }),
+    });
+    article.append(file, content);
+  }
+  body.append(article);
+  const targets = [...article.querySelectorAll(headings)].filter(heading => heading.id);
+  if (targets.length >= 3) {
+    const outline = make('nav', 'outline');
+    outline.setAttribute('aria-label', 'On this page');
+    outline.append(make('div', 'outline-title', 'On this page'));
+    for (const heading of targets) {
+      const link = make('button', heading.tagName === 'H4' ? 'sub' : '', heading.textContent);
+      link.type = 'button';
+      link.dataset.target = heading.id;
+      link.addEventListener('click', () => scrollToHeading(heading.id));
+      outline.append(link);
+    }
+    body.append(outline);
+  }
+  initiativeDetail.replaceChildren(head, tabList, body);
+  initiativeDetail.scrollTop = top;
+  if (refocus) tabList.querySelector('[aria-selected="true"]')?.focus();
+  tabList.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  if (ready && savedScroll) {
+    if (savedScroll.key === key) initiativeDetail.scrollTop = savedScroll.top;
+    savedScroll = null;
+  }
+  if (ready && pendingAnchor) { scrollToHeading(pendingAnchor); pendingAnchor = ''; }
+  updateOutline();
+}
+function renderInitiatives() {
+  if (!loaded) return;
+  renderInitiativeList();
+  renderInitiativeDetail();
+}
+let scrollFrame = 0;
+initiativeDetail.addEventListener('scroll', () => {
+  if (scrollFrame) return;
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = 0;
+    updateOutline();
+    if (!savedScroll) try { sessionStorage.setItem('tk-view-scroll', JSON.stringify({ key: detailKey, top: initiativeDetail.scrollTop })); } catch {}
+  });
+}, { passive: true });
+addEventListener('resize', updateOutline);
+initiativeSearch.addEventListener('input', () => {
+  initiativeQuery = initiativeSearch.value.trim();
+  writeViewState(false);
+  renderInitiatives();
+});
+for (const button of document.querySelectorAll('#initiative-show button')) {
+  button.addEventListener('click', () => {
+    initiativeShow = button.dataset.show;
+    writeViewState(false);
+    renderInitiatives();
+  });
+}
+initiativeList.addEventListener('keydown', event => {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  const items = [...initiativeList.querySelectorAll('.inav-item')];
+  if (!items.length) return;
+  event.preventDefault();
+  const index = items.indexOf(document.activeElement);
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : Math.max(0, Math.min(items.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)));
+  items[next].focus();
+  pickInitiative(items[next].dataset.path);
+});
+document.addEventListener('keydown', event => {
+  if (activeTab !== 'initiatives' || event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.key === 'Escape' && event.target === initiativeSearch && initiativeSearch.value) {
+    initiativeSearch.value = '';
+    initiativeSearch.dispatchEvent(new Event('input'));
+    event.preventDefault();
+  } else if (event.key === '/' && !event.target.closest('input, textarea, [contenteditable]')) {
+    initiativeSearch.focus();
+    initiativeSearch.select();
+    event.preventDefault();
+  }
+});
+function switchTab(name, record = true) {
   activeTab = name;
+  document.body.classList.toggle('initiatives-view', name === 'initiatives');
+  if (record) writeViewState(true);
   document.querySelector('.app-name').textContent = name === 'tickets' ? 'Ticket view' : 'Initiatives';
   document.title = document.querySelector('#project').textContent + ' · ' + document.querySelector('.app-name').textContent;
   closeTicketMenu();
@@ -1358,7 +2393,15 @@ for (const tab of tabs) {
     switchTab(next.id.replace('-tab', ''));
   });
 }
-document.querySelector('#unstarted-only').addEventListener('change', renderInitiatives);
+function applyViewState() {
+  const state = parseViewState(location.hash);
+  initiativeChoice = state.choice;
+  initiativeDoc = state.doc;
+  initiativeShow = state.show;
+  initiativeQuery = initiativeSearch.value = state.query;
+  switchTab(state.tab, false);
+}
+addEventListener('popstate', applyViewState);
 async function refresh() {
   try {
     const response = await fetch('/api/tickets', { cache: 'no-store', headers: etag ? { 'If-None-Match': etag } : {} });
@@ -1374,12 +2417,16 @@ async function refresh() {
     document.title = name ? name + ' · ' + document.querySelector('.app-name').textContent : 'Ticket view';
     tickets = next;
     initiatives = data.initiatives;
+    loaded = true;
     render();
     if (activeTab === 'initiatives') renderInitiatives();
     document.querySelector('#error').textContent = data.initiative_errors.length ? 'Could not read initiative maps: ' + data.initiative_errors.join('; ') : '';
   } catch (error) { document.querySelector('#error').textContent = error.message; }
 }
+document.querySelector('#copy-visible').addEventListener('click', event => copyText(batchPrompt(visibleTickets(), project), event.currentTarget));
+document.querySelector('#copy-full').addEventListener('click', event => copyText(batchPrompt(visibleTickets(), project, true), event.currentTarget));
 document.querySelector('#copy').addEventListener('click', event => copyText(promptText, event.currentTarget));
+applyViewState();
 refresh();
 setInterval(refresh, 1000);
 </script>
@@ -1418,11 +2465,75 @@ def tickets_from(directory):
     return tickets
 
 
+SKIPPED_FOLDERS = {"node_modules", "dist", "build", "tmp", "vendor"}
+ARTIFACT_LABELS = {"intent_brief": "Intent", "brainstorm": "Brainstorm", "shape_brief": "Shape", "implementation_plan": "Plan"}
+MAX_DOCUMENTS = 80
+MAX_DOCUMENT_BYTES = 2_000_000
+
+
+def document_path(project, value):
+    """Resolve a project-relative Markdown path. Returns None unless it names a
+    readable Markdown file inside the project and outside hidden folders."""
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return None
+    relative = Path(value)
+    if relative.is_absolute() or relative.suffix.lower() != ".md" or any(part.startswith(".") for part in relative.parts):
+        return None
+    try:
+        path = (project / relative).resolve()
+        if project not in path.parents or not path.is_file() or path.stat().st_size > MAX_DOCUMENT_BYTES:
+            return None
+    except OSError:
+        return None
+    return path
+
+
+def documents_from(project, folder, artifacts):
+    """List an initiative's Markdown files: the lifecycle artifacts first, then
+    other artifacts in map order, then the remaining files by path."""
+    roles = {}
+    if isinstance(artifacts, dict):
+        for key, value in artifacts.items():
+            target = value.get("path") if isinstance(value, dict) else None
+            if isinstance(target, str) and target.lower().endswith(".md"):
+                roles.setdefault((folder / target).resolve(), (key, value))
+    found = []
+    for parent, dirs, files in os.walk(folder):
+        dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name not in SKIPPED_FOLDERS
+                         and not (Path(parent) / name / "initiative-map.json").is_file())
+        found.extend((Path(parent) / name).resolve() for name in sorted(files) if name.lower().endswith(".md"))
+    found.extend(path for path in roles if path not in found)
+    order = list(ARTIFACT_LABELS) + [key for key, _ in roles.values()]
+    found.sort(key=lambda path: order.index(roles[path][0]) if path in roles else len(order))
+    documents = []
+    for path in found[:MAX_DOCUMENTS]:
+        try:
+            relative = path.relative_to(project).as_posix()
+            if not document_path(project, relative):
+                continue
+            version = str(path.stat().st_mtime_ns)
+        except (OSError, ValueError):
+            continue
+        key, artifact = roles.get(path, ("", {}))
+        name = path.relative_to(folder).as_posix() if folder in path.parents else relative
+        label = ARTIFACT_LABELS.get(key) or (key or name[:-3]).replace("_", " ").replace("-", " ").replace("/", " / ")
+        documents.append({
+            "path": relative,
+            "name": name,
+            "label": label[:1].upper() + label[1:],
+            "role": key,
+            "status": artifact.get("status") if isinstance(artifact.get("status"), str) else "",
+            "updated": artifact.get("updated_at") if isinstance(artifact.get("updated_at"), str) else "",
+            "version": version,
+        })
+    return documents
+
+
 def initiatives_from(project, tickets):
     initiatives = []
     errors = []
     for folder, dirs, files in os.walk(project):
-        dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name not in {"node_modules", "dist", "build", "tmp", "vendor"})
+        dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name not in SKIPPED_FOLDERS)
         if "initiative-map.json" not in files:
             continue
         path = Path(folder) / "initiative-map.json"
@@ -1485,7 +2596,14 @@ def initiatives_from(project, tickets):
             status, evidence = "Started", "Work recorded in the map."
         else:
             status, evidence = "No recorded start", "No linked tickets or map states show that work has started."
-        initiatives.append({"path": relative, "map": data, "status": status, "evidence": evidence})
+        initiatives.append({
+            "path": relative,
+            "map": data,
+            "status": status,
+            "evidence": evidence,
+            "tickets": [ticket["id"] for ticket in linked],
+            "documents": documents_from(project, path.parent.resolve(), data.get("artifacts")),
+        })
     initiatives.sort(key=lambda item: (item["status"] != "No recorded start", item["map"]["initiative"]["title"].casefold()))
     return initiatives, errors
 
@@ -1682,7 +2800,24 @@ def main():
             self.send_json(200, {"status": status})
 
         def do_GET(self):
-            if self.path == "/api/tickets":
+            request = urlsplit(self.path)
+            if request.path == "/api/doc":
+                if self.headers.get("Host") not in {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}:
+                    self.send_json(403, {"error": "Invalid request origin"})
+                    return
+                relative = parse_qs(request.query).get("path", [""])[0]
+                target = document_path(directory.parent, relative)
+                if not target:
+                    self.send_json(404, {"error": "Document not found: " + relative})
+                    return
+                try:
+                    text = target.read_text(encoding="utf-8", errors="replace")
+                except OSError as error:
+                    self.send_json(500, {"error": str(error)})
+                    return
+                self.send_json(200, {"path": relative, "text": text})
+                return
+            if request.path == "/api/tickets":
                 try:
                     tickets = tickets_from(directory)
                     initiatives, errors = initiatives_from(directory.parent, tickets)
@@ -1704,7 +2839,7 @@ def main():
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("ETag", etag)
-            elif self.path == "/":
+            elif request.path == "/":
                 payload = PAGE.encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
