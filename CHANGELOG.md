@@ -23,6 +23,7 @@
 - CI scripts for publishing to Homebrew tap and AUR
 
 ### Plugins
+- ticket-view 1.4.0: Add an Initiatives tab for initiative maps, with a filter for work that has no recorded start
 - ticket-view 1.3.0: Add and remove dependencies in the graph with cycle checks and a five-second undo toast for new connections; fix arrow rendering and keep selected and hovered edge highlights above the base arrows
 - ticket-view 1.2.1: Reduce graph edge crossings by swapping nodes within dependency columns before routing links
 - ticket-view 1.2.0: Show and edit partially implemented status

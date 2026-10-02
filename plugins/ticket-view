@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.3.0
+# tk-plugin-version: 1.4.0
 
 """Local ticket graph with status updates. Python 3 standard library only."""
 
@@ -174,6 +174,23 @@ PAGE = r"""<!doctype html>
   .markdown pre code { padding: 0; background: none; white-space: pre; }
   .markdown blockquote { margin: 10px 0; padding-left: 12px; border-left: 2px solid var(--line-2); color: var(--ink-2); }
   .markdown a { color: var(--accent); text-underline-offset: 2px; }
+  [hidden] { display: none !important; }
+  #tabs { display: flex; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  #tabs button { padding: 10px 2px; border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer; color: var(--ink-2); }
+  #tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 650; }
+  #initiatives-panel { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
+  .initiative-toolbar, #initiative-list { max-width: 960px; margin: 0 auto; }
+  .initiative-toolbar h2 { margin: 0; font-size: 18px; }
+  .initiative-toolbar p { margin: 6px 0 12px; color: var(--ink-2); }
+  .initiative-toolbar label { display: inline-flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+  .initiative { padding: 16px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+  .initiative h3 { margin: 0 0 6px; font-size: 16px; }
+  .initiative p { margin: 6px 0; }
+  .initiative-state { color: var(--accent); font-weight: 600; }
+  .initiative-info, .initiative-path { color: var(--ink-3); font-size: 12px; overflow-wrap: anywhere; }
+  .initiative details { margin-top: 12px; }
+  .initiative summary { cursor: pointer; color: var(--ink-2); }
+  .initiative pre { max-height: 420px; overflow: auto; padding: 12px; background: var(--sunken); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
   @media (max-width: 1100px) { main { --inspector-w: 340px; } }
   @media (max-width: 800px) {
     body { height: auto; min-height: 100vh; }
@@ -194,7 +211,11 @@ PAGE = r"""<!doctype html>
   <label><input id="show-closed" type="checkbox"> Show closed tickets</label>
   <label id="closed-epic-label" hidden><input id="show-closed-epics" type="checkbox"> Show closed epics</label>
 </div></header>
-<main>
+<nav id="tabs" role="tablist" aria-label="Project views">
+  <button id="tickets-tab" type="button" role="tab" aria-selected="true" aria-controls="tickets-panel">Tickets</button>
+  <button id="initiatives-tab" type="button" role="tab" aria-selected="false" aria-controls="initiatives-panel" tabindex="-1">Initiatives</button>
+</nav>
+<main id="tickets-panel" role="tabpanel" aria-labelledby="tickets-tab">
   <div id="left"><div id="legend"></div><div id="viewport">
     <div id="connection-hint" role="status" hidden></div>
     <div id="controls" aria-label="Graph controls">
@@ -216,6 +237,14 @@ PAGE = r"""<!doctype html>
     <div id="body" class="markdown"></div>
   </div></aside>
 </main>
+<section id="initiatives-panel" role="tabpanel" aria-labelledby="initiatives-tab" hidden>
+  <div class="initiative-toolbar">
+    <h2>Initiatives <span id="initiative-count"></span></h2>
+    <p>Work status uses linked tickets and recorded milestone states. Planning status is shown separately.</p>
+    <label><input id="unstarted-only" type="checkbox" checked> Only show initiatives with no recorded start</label>
+  </div>
+  <div id="initiative-list" aria-live="polite"></div>
+</section>
 <div id="toast" role="status" hidden><span id="toast-message"></span><button id="toast-undo" type="button">Undo</button></div>
 <div id="ticket-menu" role="menu" aria-label="Ticket actions" hidden></div>
 <script>
@@ -225,6 +254,7 @@ const legend = document.querySelector('#legend');
 const viewport = document.querySelector('#viewport');
 const palette = ['#2563eb', '#b45309', '#0f766e', '#9333ea', '#be123c', '#4d7c0f', '#0891b2', '#c2410c', '#db2777', '#a16207'];
 const colors = new Map();
+let initiatives = [], initiativeSignature = '', activeTab = 'tickets';
 let tickets = [], selected = null, structure = '', etag = '', project = '';
 let showClosed = false, showClosedEpics = false, epicFilter = null, promptText = '';
 let zoom = 1, panX = 0, panY = 0, drag = null, suppressClick = false, fitted = false;
@@ -522,6 +552,7 @@ resizer.addEventListener('keydown', event => {
 document.querySelector('#zoom-in').addEventListener('click', () => zoomAt(1.25, viewport.clientWidth / 2, viewport.clientHeight / 2));
 document.querySelector('#zoom-out').addEventListener('click', () => zoomAt(0.8, viewport.clientWidth / 2, viewport.clientHeight / 2));
 document.addEventListener('keydown', event => {
+  if (activeTab !== 'tickets') return;
   if (event.altKey || event.ctrlKey || event.metaKey || event.target.closest('input, textarea, [contenteditable]') || !ticketMenu.hidden) return;
   if (event.key === 'Escape' && connectFrom !== null) { setConnectFrom(null); event.preventDefault(); return; }
   if (event.key === 'Delete' && selectedEdge) {
@@ -1230,7 +1261,7 @@ let resizeTimer;
 function relayoutForViewport() {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (!rowCounts.length || chooseBandCount(rowCounts) === bandCount) return;
+    if (activeTab !== 'tickets' || !rowCounts.length || chooseBandCount(rowCounts) === bandCount) return;
     layout();
     updateNodes();
     updateSelection();
@@ -1239,6 +1270,7 @@ function relayoutForViewport() {
 }
 addEventListener('resize', relayoutForViewport);
 function render() {
+  if (activeTab !== 'tickets') return;
   closeTicketMenu();
   updateLegend();
   updateAssigneeLegend();
@@ -1266,6 +1298,67 @@ document.querySelector('#show-closed-epics').addEventListener('change', event =>
   showClosedEpics = event.target.checked;
   render();
 });
+function renderInitiatives() {
+  const onlyUnstarted = document.querySelector('#unstarted-only').checked;
+  const visible = initiatives.filter(item => !onlyUnstarted || item.status === 'No recorded start');
+  document.querySelector('#initiative-count').textContent = `(${visible.length} / ${initiatives.length})`;
+  const signature = JSON.stringify([onlyUnstarted, initiatives]);
+  if (signature === initiativeSignature) return;
+  initiativeSignature = signature;
+  const list = document.querySelector('#initiative-list');
+  const expanded = new Set([...list.querySelectorAll('details[open]')].map(item => item.dataset.path));
+  list.replaceChildren();
+  const element = (tag, text, className = '') => Object.assign(document.createElement(tag), { textContent: text, className });
+  for (const item of visible) {
+    const card = element('article', '', 'initiative');
+    const info = item.map.initiative;
+    const implementation = item.map.implementation || {};
+    card.append(element('h3', info.title), element('p', item.status, 'initiative-state'), element('p', info.summary || ''));
+    card.append(element('p', `Phase: ${info.current_phase || 'unknown'} · Planning: ${implementation.status || 'unknown'} · Updated: ${info.last_updated || 'unknown'}`, 'initiative-info'));
+    card.append(element('p', item.evidence, 'initiative-info'), element('p', item.path, 'initiative-path'));
+    const milestones = implementation.milestones || [];
+    if (milestones.length) {
+      const rows = element('ul', '');
+      for (const milestone of milestones) rows.append(element('li', `${milestone.title || milestone.outcome || milestone.id}: ${milestone.status || 'No state recorded'}`));
+      card.append(rows);
+    }
+    const details = element('details', '');
+    details.dataset.path = item.path;
+    details.open = expanded.has(item.path);
+    details.append(element('summary', 'View initiative-map.json'), element('pre', JSON.stringify(item.map, null, 2)));
+    card.append(details);
+    list.append(card);
+  }
+  if (!visible.length) list.append(element('p', initiatives.length ? 'No initiatives match this filter. Clear the filter to see all initiatives.' : 'No initiative-map.json files found in this project.'));
+}
+function switchTab(name) {
+  activeTab = name;
+  document.querySelector('.app-name').textContent = name === 'tickets' ? 'Ticket view' : 'Initiatives';
+  document.title = document.querySelector('#project').textContent + ' · ' + document.querySelector('.app-name').textContent;
+  closeTicketMenu();
+  setConnectFrom(null);
+  for (const tab of document.querySelectorAll('#tabs button')) {
+    const active = tab.id === name + '-tab';
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    document.getElementById(tab.getAttribute('aria-controls')).hidden = !active;
+  }
+  for (const id of ['count', 'filters', 'assignee-legend']) document.getElementById(id).hidden = name !== 'tickets';
+  if (name === 'tickets') { render(); relayoutForViewport(); }
+  else renderInitiatives();
+}
+const tabs = [...document.querySelectorAll('#tabs button')];
+for (const tab of tabs) {
+  tab.addEventListener('click', () => switchTab(tab.id.replace('-tab', '')));
+  tab.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs.at(-1) : tabs[1 - tabs.indexOf(tab)];
+    next.focus();
+    switchTab(next.id.replace('-tab', ''));
+  });
+}
+document.querySelector('#unstarted-only').addEventListener('change', renderInitiatives);
 async function refresh() {
   try {
     const response = await fetch('/api/tickets', { cache: 'no-store', headers: etag ? { 'If-None-Match': etag } : {} });
@@ -1278,10 +1371,12 @@ async function refresh() {
     const name = project.split(/[\\/]/).filter(Boolean).pop() || '';
     document.querySelector('#project').textContent = name || 'Ticket view';
     document.querySelector('.app-name').hidden = !name;
-    document.title = name ? name + ' · Ticket view' : 'Ticket view';
+    document.title = name ? name + ' · ' + document.querySelector('.app-name').textContent : 'Ticket view';
     tickets = next;
+    initiatives = data.initiatives;
     render();
-    document.querySelector('#error').textContent = '';
+    if (activeTab === 'initiatives') renderInitiatives();
+    document.querySelector('#error').textContent = data.initiative_errors.length ? 'Could not read initiative maps: ' + data.initiative_errors.join('; ') : '';
   } catch (error) { document.querySelector('#error').textContent = error.message; }
 }
 document.querySelector('#copy').addEventListener('click', event => copyText(promptText, event.currentTarget));
@@ -1321,6 +1416,78 @@ def tickets_from(directory):
             "body": body,
         })
     return tickets
+
+
+def initiatives_from(project, tickets):
+    initiatives = []
+    errors = []
+    for folder, dirs, files in os.walk(project):
+        dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name not in {"node_modules", "dist", "build", "tmp", "vendor"})
+        if "initiative-map.json" not in files:
+            continue
+        path = Path(folder) / "initiative-map.json"
+        relative = path.relative_to(project).as_posix()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            info = data["initiative"]
+            implementation = data.get("implementation", {})
+            if not isinstance(info, dict) or not isinstance(info.get("title"), str) or not info["title"].strip():
+                raise ValueError("Expected an initiative title")
+            if not isinstance(implementation, dict) or not isinstance(implementation.get("milestones", []), list):
+                raise ValueError("Expected an implementation object and milestone list")
+            if any(not isinstance(item, dict) or not isinstance(item.get("status", ""), str) for item in implementation.get("milestones", [])):
+                raise ValueError("Expected milestone objects with text states")
+            if not all(isinstance(implementation.get(key, ""), str) for key in ("status", "execution_status")):
+                raise ValueError("Expected text implementation states")
+        except (OSError, UnicodeError, ValueError, KeyError, TypeError) as error:
+            errors.append(f"{relative}: {error}")
+            continue
+        # ponytail: path references link tickets; use explicit initiative IDs
+        # if references become ambiguous. The slash separates similar slugs.
+        reference = path.parent.relative_to(project).as_posix() + "/"
+        ids = set()
+
+        def collect_ids(value):
+            if isinstance(value, str):
+                ids.add(value)
+            elif isinstance(value, list):
+                for item in value:
+                    collect_ids(item)
+            elif isinstance(value, dict):
+                for key, item in value.items():
+                    if key not in {"dependencies", "dependency_edges", "coverage"}:
+                        collect_ids(item)
+
+        for value in (data.get("tickets"), implementation.get("tickets"), implementation.get("ticket_graph")):
+            collect_ids(value)
+        linked = [ticket for ticket in tickets if ticket["id"] in ids or reference in ticket["body"] or reference in ticket["metadata"].get("external-ref", "")]
+        states = [ticket["status"] for ticket in linked if ticket["type"] != "epic"]
+        if not states:
+            states = [ticket["status"] for ticket in linked]
+        milestones = [item.get("status", "") for item in implementation.get("milestones", [])]
+        done = {"closed", "done", "complete", "completed"}
+        started = {"in_progress", "in-progress", "started", "partially_implemented", "partial"}
+        execution = implementation.get("execution_status", "")
+        map_complete = execution in done or implementation.get("status") in done or (milestones and all(state in done for state in milestones))
+        map_started = execution in started or implementation.get("status") in started or any(state in done | started for state in milestones)
+        if states:
+            complete = all(state in done for state in states) and (not milestones or map_complete)
+            if complete:
+                status = "Complete"
+            elif map_started or map_complete or any(state in done | started for state in states):
+                status = "Started"
+            else:
+                status = "No recorded start"
+            evidence = f"{len(states)} linked tickets; {sum(state in done for state in states)} closed."
+        elif map_complete:
+            status, evidence = "Complete", "Completion recorded in the map."
+        elif map_started:
+            status, evidence = "Started", "Work recorded in the map."
+        else:
+            status, evidence = "No recorded start", "No linked tickets or map states show that work has started."
+        initiatives.append({"path": relative, "map": data, "status": status, "evidence": evidence})
+    initiatives.sort(key=lambda item: (item["status"] != "No recorded start", item["map"]["initiative"]["title"].casefold()))
+    return initiatives, errors
 
 
 def write_assignee(path, expected, name):
@@ -1517,9 +1684,13 @@ def main():
         def do_GET(self):
             if self.path == "/api/tickets":
                 try:
+                    tickets = tickets_from(directory)
+                    initiatives, errors = initiatives_from(directory.parent, tickets)
                     payload = json.dumps({
                         "project": str(directory.parent),
-                        "tickets": tickets_from(directory),
+                        "tickets": tickets,
+                        "initiatives": initiatives,
+                        "initiative_errors": errors,
                     }, ensure_ascii=False).encode()
                 except OSError as error:
                     self.send_error(500, str(error))

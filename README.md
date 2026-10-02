@@ -126,6 +126,16 @@ The page checks for changes each second and keeps node positions stable until
 dependencies or epics change, or until a window resize changes the number of
 bands. Use `tk view --no-open` to print the URL without opening a browser.
 
+The **Initiatives** tab lists the project's `initiative-map.json` files separately
+from tickets. It first shows only initiatives with **No recorded start**. Clear
+that filter to include started and complete work. Each entry shows its summary,
+phase, planning status, milestones, file path, and expandable map contents.
+Work status uses linked ticket states, then recorded milestone or execution
+states. A current plan alone does not mean work has started. **No recorded
+start** means the files contain no evidence of started work.
+Maps refresh with tickets. Invalid maps show an error without hiding valid maps.
+The scan skips hidden folders, dependencies, build output, vendor files, and `tmp/`.
+
 ## Plugins
 
 Executables named `tk-<cmd>` or `ticket-<cmd>` in your PATH are invoked automatically. This allows you to add custom commands or override built-in ones.
