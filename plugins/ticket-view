@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.6.0
+# tk-plugin-version: 1.7.0
 
 """Local ticket graph with status updates. Python 3 standard library only."""
 
@@ -239,7 +239,25 @@ PAGE = r"""<!doctype html>
   .ibutton.primary:hover { background: #18559f; color: white; }
   .ibutton.path { font: 12.5px var(--mono); }
   .ibutton .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .idetail-tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 22px; padding: 0 var(--gutter); border-bottom: 1px solid var(--line); background: var(--surface); overflow-x: auto; scrollbar-width: none; }
+  .idetail-tabbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 22px; padding: 0 var(--gutter); border-bottom: 1px solid var(--line); background: var(--surface); }
+  .idetail-tabs { flex: 1; min-width: 0; display: flex; gap: 22px; overflow-x: auto; scrollbar-width: none; }
+  .idetail-tabs .tab-extra { max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
+  .doc-more { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface); color: var(--ink-2); font-size: 13.5px; font-weight: 550; white-space: nowrap; cursor: pointer; }
+  .doc-more:hover, .doc-more[aria-expanded="true"] { background: var(--sunken); color: var(--ink); }
+  .doc-more .count { padding: 0 6px; border-radius: 999px; background: var(--sunken); border: 1px solid var(--line); color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .doc-more svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  #doc-menu { position: fixed; z-index: 10; display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--line-2); border-radius: 9px; background: var(--surface); box-shadow: 0 10px 30px #17212c2e; overflow: hidden; }
+  #doc-menu[hidden] { display: none; }
+  .doc-menu-filter { margin: 10px 10px 4px; height: 34px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 7px; font: inherit; font-size: 14px; color: var(--ink); background: var(--surface); }
+  .doc-menu-filter:focus-visible { outline-offset: 0; border-color: var(--accent); }
+  .doc-menu-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 6px 8px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+  .doc-menu-group { margin: 10px 8px 3px; color: var(--ink-3); font: 11.5px/1.4 var(--mono); overflow-wrap: anywhere; }
+  .doc-menu-item { display: grid; gap: 1px; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: none; text-align: left; cursor: pointer; }
+  .doc-menu-item:hover, .doc-menu-item:focus-visible { background: var(--accent-soft); outline: none; }
+  .doc-menu-item[aria-current="true"] .doc-menu-title { color: var(--accent); font-weight: 620; }
+  .doc-menu-title { color: var(--ink); font-size: 14px; line-height: 1.35; }
+  .doc-menu-file { color: var(--ink-3); font: 11.5px var(--mono); overflow-wrap: anywhere; }
+  .doc-menu-empty { margin: 10px 8px; color: var(--ink-2); font-size: 14px; }
   .idetail-tabs button { flex: none; padding: 12px 0 11px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--ink-2); font-size: 14.5px; white-space: nowrap; cursor: pointer; }
   .idetail-tabs button:hover { color: var(--ink); }
   .idetail-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 620; }
@@ -422,6 +440,7 @@ PAGE = r"""<!doctype html>
 </section>
 <div id="toast" role="status" hidden><span id="toast-message"></span><button id="toast-undo" type="button">Undo</button></div>
 <div id="ticket-menu" role="menu" aria-label="Ticket actions" hidden></div>
+<div id="doc-menu" role="dialog" aria-label="All initiative documents" hidden></div>
 <script>
 const graph = document.querySelector('#graph');
 const edges = document.querySelector('#edges');
@@ -1891,7 +1910,7 @@ function scrollToHeading(fragment) {
 }
 function initiativePrompt(item, doc) {
   const lines = [
-    `Use $software-design-sleuth-full to review and update the initiative "${item.map.initiative.title}".`,
+    `Use /software-design-sleuth-full to review and update the initiative "${item.map.initiative.title}".`,
     '',
     'Initiative folder: ' + [project, initiativeFolder(item)].filter(Boolean).join('/'),
     'Initiative map: ' + project + '/' + item.path,
@@ -2182,6 +2201,87 @@ function updateOutline() {
   for (const link of links) if (document.getElementById(link.dataset.target)?.getBoundingClientRect().top <= limit) active = link;
   for (const link of links) link.setAttribute('aria-current', String(link === active));
 }
+const DOC_TAB_LIMIT = 6;
+const LIFECYCLE_ROLES = new Set(['intent_brief', 'brainstorm', 'shape_brief', 'implementation_plan']);
+const docMenu = document.querySelector('#doc-menu');
+let docMenuTrigger = null;
+function closeDocMenu(refocus) {
+  if (docMenu.hidden) return;
+  docMenu.hidden = true;
+  docMenu.replaceChildren();
+  docMenuTrigger?.setAttribute('aria-expanded', 'false');
+  if (refocus && docMenuTrigger?.isConnected) docMenuTrigger.focus();
+  docMenuTrigger = null;
+}
+function placeDocMenu() {
+  if (docMenu.hidden || !docMenuTrigger) return;
+  const rect = docMenuTrigger.getBoundingClientRect();
+  const width = Math.min(540, innerWidth - 24);
+  docMenu.style.width = width + 'px';
+  docMenu.style.left = Math.max(12, Math.min(rect.right - width, innerWidth - width - 12)) + 'px';
+  docMenu.style.top = rect.bottom + 6 + 'px';
+  docMenu.style.maxHeight = Math.max(200, innerHeight - rect.bottom - 18) + 'px';
+}
+// Lists every document in the initiative, grouped by folder, with a filter
+// that matches titles and file paths.
+function openDocMenu(item, doc, trigger) {
+  closeDocMenu(false);
+  docMenuTrigger = trigger;
+  trigger.setAttribute('aria-expanded', 'true');
+  const filter = make('input', 'doc-menu-filter');
+  filter.type = 'search';
+  filter.placeholder = 'Filter ' + item.documents.length + ' documents';
+  filter.setAttribute('aria-label', 'Filter documents');
+  filter.autocomplete = 'off';
+  filter.spellcheck = false;
+  const list = make('div', 'doc-menu-list');
+  const pick = entry => { closeDocMenu(false); openDoc(entry.path); };
+  const draw = () => {
+    const terms = filter.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const groups = new Map();
+    for (const entry of item.documents) {
+      if (!terms.every(term => (entry.title + ' ' + entry.name).toLowerCase().includes(term))) continue;
+      const folder = entry.name.split('/').slice(0, -1).join('/');
+      if (!groups.has(folder)) groups.set(folder, []);
+      groups.get(folder).push(entry);
+    }
+    list.replaceChildren();
+    for (const [folder, group] of groups) {
+      if (groups.size > 1 || folder) list.append(make('div', 'doc-menu-group', folder ? folder + '/' : 'Initiative folder'));
+      for (const entry of group) {
+        const button = make('button', 'doc-menu-item');
+        button.type = 'button';
+        button.title = entry.path;
+        if (entry.path === doc) button.setAttribute('aria-current', 'true');
+        button.append(make('span', 'doc-menu-title', entry.title || entry.label), make('span', 'doc-menu-file', entry.name.split('/').pop()));
+        button.addEventListener('click', () => pick(entry));
+        list.append(button);
+      }
+    }
+    if (!list.children.length) list.append(make('p', 'doc-menu-empty', 'No document matches this filter.'));
+  };
+  filter.addEventListener('input', draw);
+  docMenu.onkeydown = event => {
+    const items = [...list.querySelectorAll('.doc-menu-item')];
+    const index = items.indexOf(document.activeElement);
+    if (event.key === 'Escape') closeDocMenu(true);
+    else if (event.key === 'Enter' && event.target === filter && items.length) items[0].click();
+    else if (event.key === 'ArrowDown' && items.length) items[Math.min(items.length - 1, index + 1)].focus();
+    else if (event.key === 'ArrowUp') (index > 0 ? items[index - 1] : filter).focus();
+    else return;
+    event.preventDefault();
+  };
+  draw();
+  docMenu.replaceChildren(filter, list);
+  docMenu.hidden = false;
+  placeDocMenu();
+  filter.focus();
+  list.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
+}
+addEventListener('resize', placeDocMenu);
+document.addEventListener('pointerdown', event => {
+  if (!docMenu.hidden && !docMenu.contains(event.target) && !docMenuTrigger?.contains(event.target)) closeDocMenu(false);
+});
 function renderInitiativeDetail() {
   initiativesPanel.classList.toggle('detail-open', initiativeChoice !== null);
   const item = selectedInitiative();
@@ -2236,14 +2336,22 @@ function renderInitiativeDetail() {
   if (info.summary) head.append(make('p', 'idetail-summary', info.summary));
   head.append(meta);
 
+  closeDocMenu(false);
+  const tabBar = make('div', 'idetail-tabbar');
   const tabList = make('div', 'idetail-tabs');
   tabList.setAttribute('role', 'tablist');
   tabList.setAttribute('aria-label', 'Initiative documents');
-  const entries = item.documents.map(entry => ({ key: entry.path, label: entry.label, note: entry.status && entry.status !== 'current' ? humanize(entry.status) : '', title: entry.path }));
-  if (doc !== 'map' && !listed) entries.push({ key: doc, label: doc.split('/').pop(), note: 'Linked', title: doc });
+  // With many documents, only the lifecycle briefs and the files at the top
+  // of the initiative folder get tabs; the menu reaches the rest.
+  const crowded = item.documents.length > DOC_TAB_LIMIT + 1;
+  const inline = crowded ? item.documents.filter(entry => LIFECYCLE_ROLES.has(entry.role) || !entry.name.includes('/')).slice(0, DOC_TAB_LIMIT) : item.documents;
+  const entries = inline.map(entry => ({ key: entry.path, label: entry.label, note: entry.status && entry.status !== 'current' ? humanize(entry.status) : '', title: entry.path }));
+  if (doc !== 'map' && !inline.includes(listed)) entries.push(listed
+    ? { key: doc, label: listed.title || listed.label, note: '', title: listed.path, extra: true }
+    : { key: doc, label: doc.split('/').pop(), note: 'Linked', title: doc, extra: true });
   entries.push({ key: 'map', label: 'Map', note: '', title: 'The initiative map, laid out for reading' });
   for (const entry of entries) {
-    const tab = make('button', entry.key === 'map' ? 'tab-end' : '', entry.label);
+    const tab = make('button', entry.key === 'map' ? 'tab-end' : entry.extra ? 'tab-extra' : '', entry.label);
     tab.type = 'button';
     tab.title = entry.title;
     tab.setAttribute('role', 'tab');
@@ -2259,6 +2367,18 @@ function renderInitiativeDetail() {
       openDoc(entries[next].key);
     });
     tabList.append(tab);
+  }
+  tabBar.append(tabList);
+  if (crowded) {
+    const more = make('button', 'doc-more');
+    more.type = 'button';
+    more.title = 'Browse and filter every document in this initiative';
+    more.setAttribute('aria-haspopup', 'dialog');
+    more.setAttribute('aria-expanded', 'false');
+    more.append('All documents', make('span', 'count', String(item.documents.length)));
+    more.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5"/></svg>');
+    more.addEventListener('click', () => docMenu.hidden ? openDocMenu(item, doc, more) : closeDocMenu(true));
+    tabBar.append(more);
   }
 
   const body = make('div', 'idetail-body' + (doc === 'map' ? ' wide' : ''));
@@ -2304,7 +2424,7 @@ function renderInitiativeDetail() {
     }
     body.append(outline);
   }
-  initiativeDetail.replaceChildren(head, tabList, body);
+  initiativeDetail.replaceChildren(head, tabBar, body);
   initiativeDetail.scrollTop = top;
   if (refocus) tabList.querySelector('[aria-selected="true"]')?.focus();
   tabList.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -2371,6 +2491,7 @@ function switchTab(name, record = true) {
   document.querySelector('.app-name').textContent = name === 'tickets' ? 'Ticket view' : 'Initiatives';
   document.title = document.querySelector('#project').textContent + ' · ' + document.querySelector('.app-name').textContent;
   closeTicketMenu();
+  closeDocMenu(false);
   setConnectFrom(null);
   for (const tab of document.querySelectorAll('#tabs button')) {
     const active = tab.id === name + '-tab';
@@ -2417,7 +2538,12 @@ async function refresh() {
     document.title = name ? name + ' · ' + document.querySelector('.app-name').textContent : 'Ticket view';
     tickets = next;
     initiatives = data.initiatives;
+    // Projects without .tickets/ only have initiatives to show, and a project
+    // with no tickets opens on its initiatives unless the URL names a view.
+    document.querySelector('#tabs').hidden = !data.has_tickets;
+    const first = !loaded;
     loaded = true;
+    if (activeTab !== 'initiatives' && (!data.has_tickets || (first && !tickets.length && initiatives.length && !/(^#|&)view=/.test(location.hash)))) switchTab('initiatives', false);
     render();
     if (activeTab === 'initiatives') renderInitiatives();
     document.querySelector('#error').textContent = data.initiative_errors.length ? 'Could not read initiative maps: ' + data.initiative_errors.join('; ') : '';
@@ -2436,6 +2562,8 @@ setInterval(refresh, 1000);
 
 def tickets_from(directory):
     tickets = []
+    if directory is None:
+        return tickets
     for path in sorted(directory.glob("*.md")):
         content = path.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines()
@@ -2488,6 +2616,17 @@ def document_path(project, value):
     return path
 
 
+def document_title(path):
+    """Return the first top-level heading of a Markdown file, or ''."""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            head = handle.read(8192)
+    except OSError:
+        return ""
+    match = re.search(r"^#\s+(.+?)\s*#*\s*$", head, re.MULTILINE)
+    return match.group(1).strip() if match else ""
+
+
 def documents_from(project, folder, artifacts):
     """List an initiative's Markdown files: the lifecycle artifacts first, then
     other artifacts in map order, then the remaining files by path."""
@@ -2522,6 +2661,7 @@ def documents_from(project, folder, artifacts):
             "name": name,
             "label": label[:1].upper() + label[1:],
             "role": key,
+            "title": document_title(path),
             "status": artifact.get("status") if isinstance(artifact.get("status"), str) else "",
             "updated": artifact.get("updated_at") if isinstance(artifact.get("updated_at"), str) else "",
             "version": version,
@@ -2677,14 +2817,35 @@ def would_cycle(tickets, source, target):
     return False
 
 
+def find_project():
+    """Return (project, tickets directory or None). TICKETS_DIR wins; otherwise
+    the nearest parent with .tickets/, then the git root, then the working
+    directory, so projects with only initiative documents still open."""
+    explicit = os.environ.get("TICKETS_DIR", "")
+    if explicit:
+        directory = Path(explicit).expanduser().resolve()
+        return (directory.parent, directory) if directory.is_dir() else (None, None)
+    here = Path.cwd().resolve()
+    for folder in (here, *here.parents):
+        if (folder / ".tickets").is_dir():
+            return folder, folder / ".tickets"
+    try:
+        root = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=here, capture_output=True, text=True)
+        if root.returncode == 0 and root.stdout.strip():
+            return Path(root.stdout.strip()).resolve(), None
+    except OSError:
+        pass
+    return here, None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Open a live ticket graph")
     parser.add_argument("--port", type=int, default=0, help="Local port (default: automatic)")
     parser.add_argument("--no-open", action="store_true", help="Do not open a browser")
     args = parser.parse_args()
-    directory = Path(os.environ.get("TICKETS_DIR", ".tickets")).expanduser().resolve()
-    if not directory.is_dir():
-        parser.error("No .tickets directory found; run from a ticket project")
+    project, directory = find_project()
+    if project is None:
+        parser.error("Tickets directory not found: " + os.environ["TICKETS_DIR"])
     local_ticket = Path(__file__).resolve().parent.parent / "ticket"
     ticket_command = os.environ.get("TK_SCRIPT") or (str(local_ticket) if local_ticket.is_file() else None) or shutil.which("ticket") or shutil.which("tk")
     dependency_lock = threading.Lock()
@@ -2711,6 +2872,9 @@ def main():
             allowed_hosts = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
             if host not in allowed_hosts or (origin and origin != f"http://{host}"):
                 self.send_json(403, {"error": "Invalid request origin"})
+                return
+            if directory is None:
+                self.send_json(404, {"error": "This project has no .tickets directory"})
                 return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
                 self.send_json(415, {"error": "Expected JSON request"})
@@ -2789,7 +2953,7 @@ def main():
                 return
             try:
                 result = subprocess.run([ticket_command, "super", "status", ticket_id, status],
-                                        cwd=directory.parent, env={**os.environ, "TICKETS_DIR": str(directory)},
+                                        cwd=project, env={**os.environ, "TICKETS_DIR": str(directory)},
                                         capture_output=True, text=True)
             except OSError:
                 self.send_json(503, {"error": "Ticket command unavailable"})
@@ -2806,7 +2970,7 @@ def main():
                     self.send_json(403, {"error": "Invalid request origin"})
                     return
                 relative = parse_qs(request.query).get("path", [""])[0]
-                target = document_path(directory.parent, relative)
+                target = document_path(project, relative)
                 if not target:
                     self.send_json(404, {"error": "Document not found: " + relative})
                     return
@@ -2820,9 +2984,10 @@ def main():
             if request.path == "/api/tickets":
                 try:
                     tickets = tickets_from(directory)
-                    initiatives, errors = initiatives_from(directory.parent, tickets)
+                    initiatives, errors = initiatives_from(project, tickets)
                     payload = json.dumps({
-                        "project": str(directory.parent),
+                        "project": str(project),
+                        "has_tickets": directory is not None,
                         "tickets": tickets,
                         "initiatives": initiatives,
                         "initiative_errors": errors,

@@ -104,7 +104,8 @@ against the current repository, then run `tk status <id> ready`. `tk frontier`
 shows eligible `open`, `ready`, and `partially_implemented` tickets. Use `partially_implemented` when work started but was left unfinished; it stays on the frontier without losing that history. `tk ready` shows only tickets marked `ready`. A ticket with an unfinished dependency appears in `tk blocked` when its status is `open`, `ready`, `in_progress`, or `partially_implemented`. `tk start` accepts `ready` or `partially_implemented` with closed dependencies.
 
 `tk view` opens a local graph for the current project's `.tickets/`
-folder. Dependencies point from left to right. When the graph is much wider
+folder. A project with no `.tickets/` folder opens straight to its
+initiatives, and a project with no tickets opens on the Initiatives tab. Dependencies point from left to right. When the graph is much wider
 than the window, later columns wrap into stacked bands below the first. Tickets
 with no visible dependency in either direction form a pool: a grid left of the
 dependency columns, set apart by a dotted line. The pool's column count is
@@ -141,7 +142,11 @@ text in titles and summaries is highlighted.
 
 The right side runs the full height of the window. It shows the selected
 initiative: its title, summary, work status, phase, and a tab for each Markdown
-file in its folder. The tabs stay at the top of the window as you scroll. The intent brief, shape
+file in its folder. The tabs stay at the top of the window as you scroll.
+When an initiative has more than seven documents, only the briefs and the files
+at the top of its folder get tabs; **All documents** opens a list of every
+file, grouped by folder, titled by its first heading, and filtered as you type.
+A document opened from that list gets its own tab while it is open. The intent brief, shape
 brief, and implementation plan come first, then any other documents. Documents
 render with headings, tables, nested lists, task lists, and code blocks. Wide
 windows show an outline of the document's headings. A link to another Markdown
@@ -150,8 +155,8 @@ document. The **Map** tab lays out the map itself for reading: lifecycle stages,
 shape, milestones, linked tickets, claims, sources, and history. Fields without
 a dedicated layout still appear. Click a linked ticket to open it in the graph.
 
-**Copy prompt to update** copies a prompt that names the software design sleuth
-skill and gives the full paths of the initiative folder, its map, and the open
+**Copy prompt to update** copies a prompt that names the
+`/software-design-sleuth-full` skill and gives the full paths of the initiative folder, its map, and the open
 document, ending with a place for your comments. Click the folder path under
 the summary to copy its full path.
 

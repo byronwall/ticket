@@ -60,3 +60,28 @@ with TemporaryDirectory() as temp:
     assert 'finished' not in read()
 
 print('ticket view initiatives: ok')
+
+# Documents carry their first heading as a title, and a project without
+# .tickets/ still opens from its git root.
+import os
+import subprocess
+with TemporaryDirectory() as temp:
+    root = Path(temp).resolve()
+    folder = root / 'docs' / 'intent' / 'solo'
+    (folder / 'resources').mkdir(parents=True)
+    (folder / 'initiative-map.json').write_text(json.dumps({'initiative': {'title': 'Solo'}}))
+    (folder / 'intent-brief.md').write_text('Intro\n\n# Solo intent #\n')
+    (folder / 'resources' / 'notes.md').write_text('no heading\n')
+    items, errors = viewer['initiatives_from'](root, viewer['tickets_from'](None))
+    assert not errors and [doc['title'] for doc in items[0]['documents']] == ['Solo intent', '']
+    subprocess.run(['git', 'init', '-q', str(root)], check=True)
+    previous, saved = Path.cwd(), os.environ.pop('TICKETS_DIR', None)
+    os.chdir(folder)
+    try:
+        assert viewer['find_project']() == (root, None)
+        (root / '.tickets').mkdir()
+        assert viewer['find_project']() == (root, root / '.tickets')
+    finally:
+        os.chdir(previous)
+        if saved is not None:
+            os.environ['TICKETS_DIR'] = saved

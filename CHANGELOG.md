@@ -23,6 +23,7 @@
 - CI scripts for publishing to Homebrew tap and AUR
 
 ### Plugins
+- ticket-view 1.7.0: Open projects without a `.tickets/` folder straight to their initiatives, and open on Initiatives when there are no tickets; with many documents, show tabs for the briefs and top-level files and reach the rest from a filterable All documents menu grouped by folder and titled by each file's heading; the update prompt now names the skill as `/software-design-sleuth-full`
 - ticket-view 1.6.0: Rebuild the Initiatives tab as a reader with a searchable list, a tab for each Markdown document, a readable layout of the map, a prompt for updating the initiative, and view state in the URL; render tables, nested lists, and task lists in ticket bodies
 - ticket-view 1.5.0: Filter the graph by assignee from the header legend, and copy one prompt that lists every visible ticket in dependency order, with or without the full ticket text
 - ticket-view 1.5.0: Lay out tickets with no visible dependencies as a pool grid left of the dependency columns, sized so the graph is close to the window's shape
