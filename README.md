@@ -104,7 +104,8 @@ against the current repository, then run `tk status <id> ready`. `tk frontier`
 shows eligible `open`, `ready`, and `partially_implemented` tickets. Use `partially_implemented` when work started but was left unfinished; it stays on the frontier without losing that history. `tk ready` shows only tickets marked `ready`. A ticket with an unfinished dependency appears in `tk blocked` when its status is `open`, `ready`, `in_progress`, or `partially_implemented`. `tk start` accepts `ready` or `partially_implemented` with closed dependencies.
 
 `tk view` opens a local graph for the current project's `.tickets/`
-folder. Dependencies point from left to right. When the graph is much wider
+folder. A project with no `.tickets/` folder opens straight to its
+initiatives, and a project with no tickets opens on the Initiatives tab. Dependencies point from left to right. When the graph is much wider
 than the window, later columns wrap into stacked bands below the first. Tickets
 with no visible dependency in either direction form a pool: a grid left of the
 dependency columns, set apart by a dotted line. The pool's column count is
@@ -134,34 +135,74 @@ bands or pool columns. Use `tk view --no-open` to print the URL without opening 
 
 The **Initiatives** tab is a reader for the project's `initiative-map.json`
 files and the Markdown documents beside them. The list on the left has a search
-box and a work-status filter: **No start**, **Started**, **Complete**, or
-**All**. It first shows initiatives with no recorded start when there are any.
-Press `/` to search, and use the arrow keys to move through the list. Matching
-text in titles and summaries is highlighted.
+box, a status menu (**Open**, each status with its count, or **All**), and a sort:
+**Recently edited** (the newest change to the map or any of its documents, the
+default), **Title**, **Status**, or **Phase**. Open hides completed and cancelled
+work. Each row shows its status, phase, how long ago it was edited, in blue when it
+changed in the last day. Press `/` to search, and use the arrow keys to move
+through the list. Matching text in titles, summaries, and next actions is
+highlighted.
 
-The right side runs the full height of the window. It shows the selected
-initiative: its title, summary, work status, phase, and a tab for each Markdown
-file in its folder. The tabs stay at the top of the window as you scroll. The intent brief, shape
-brief, and implementation plan come first, then any other documents. Documents
-render with headings, tables, nested lists, task lists, and code blocks. Wide
-windows show an outline of the document's headings. A link to another Markdown
-file in the project opens that file in the reader; Back returns to the previous
-document. The **Map** tab lays out the map itself for reading: lifecycle stages,
-shape, milestones, linked tickets, claims, sources, and history. Fields without
-a dedicated layout still appear. Click a linked ticket to open it in the graph.
+**Table** (or `T`) expands the list into a full-width table with the summary,
+status, phase, next action, dependencies, latest history entry, and edit time of
+each initiative. The search, status menu, sort, and selection carry over, and the
+Initiative, Status, Phase, and Edited headers sort. Click a row to open it in the
+reader; **Reader** or Back returns to the table.
 
-**Copy prompt to update** copies a prompt that names the software design sleuth
-skill and gives the full paths of the initiative folder, its map, and the open
-document, ending with a place for your comments. Click the folder path under
-the summary to copy its full path.
+Status is the map's `initiative.status`: planned, active, paused, completed, or
+cancelled. A map without one shows a status inferred from its work evidence, in
+italics with a dashed marker. **Check status** flags an initiative whose recorded
+status disagrees with its linked tickets or milestones.
 
-The tab, selected initiative, open document, search, and filter are stored in
-the URL, so a refresh returns to the same place. The reading position is
+The **Board** tab lays initiatives out in one column per status. Drag a card to
+another column to change its status; a toast offers Undo for five seconds.
+Right-click a card, or press Shift+F10 on it, to pick a status from the keyboard.
+Each column's **⋯** menu copies one prompt that lists every card in it, and the
+Completed and Cancelled columns add **Copy retire prompt**, which approves
+retirement of those initiatives. Cards show the next action, phase,
+and dependency counts.
+
+To reference several initiatives at once, Cmd-click (or Ctrl- or Shift-click)
+them in the list or on the board, tick the checkbox that replaces the status dot
+on hover, or press `X` on a focused row. The bar that appears copies one prompt
+for the selection, and a retirement prompt when every selected initiative is
+finished. Press Escape to clear the selection. With nothing selected, the same
+bar copies a prompt for everything the filter shows.
+
+The right side shows the selected initiative. Click the status or phase to
+change it, and click the next action to edit it in place (Enter saves, Escape
+cancels). **Depends on** lists the initiatives this one waits on, stored as slugs
+in `initiative.depends_on`; **Add** picks another initiative, and a dependency
+that would create a cycle is refused. **Needed by** and **Related** (from
+`related_initiatives`) appear when they apply. **Activity** shows the three newest
+history entries; **All N entries** opens the full history in the map. Every edit sets
+`last_updated`, appends a history entry, keeps the file's indentation, and is
+refused if the map changed since the page last read it.
+
+The intent, brainstorm, shape, and plan briefs and the **Map** get tabs. Every
+document in the folder appears in a file tree: in the side rail on wide windows,
+or under **Files** otherwise. Folders fold, and the tree filters as you type in
+the Files menu. A document opened from the tree gets its own tab while it is
+open. Documents render with headings, tables, nested lists, task lists, and
+code blocks. Wide windows also show an outline of the document's headings. A
+link to another Markdown file in the project opens that file in the reader;
+Back returns to the previous document. The **Map** tab lays out the map itself
+for reading: lifecycle stages, shape, milestones, linked tickets, claims,
+sources, and history. Fields without a dedicated layout still appear. Click a
+linked ticket to open it in the graph.
+
+**Copy prompt to update** copies a prompt that names the
+`/software-design-sleuth-full` skill and gives the full paths of the initiative
+folder, its map, and the open document. It ends with a `---` line, ready for your
+comments. Completed and cancelled initiatives also offer **Copy retire prompt**.
+Click the folder path above the title to copy its full path.
+
+The tab, selected initiative, open document, search, filter, sort, and table layout are stored
+in the URL, so a refresh returns to the same place. The reading position is
 restored as well.
 
-Work status uses linked ticket states, then recorded milestone or execution
-states. A current plan alone does not mean work has started. **No recorded
-start** means the files contain no evidence of started work.
+Work evidence uses linked ticket states, then recorded milestone or execution
+states. A current plan alone does not mean work has started.
 Maps and documents refresh with tickets. Invalid maps show an error without
 hiding valid maps. The scan skips hidden folders, dependencies, build output,
 vendor files, and `tmp/`. Only Markdown files inside the project can be read.

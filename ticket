@@ -1260,6 +1260,8 @@ cmd_view() {
         echo "Error: ticket-view plugin is not installed" >&2
         return 1
     fi
+    # The viewer also opens projects that only have initiative documents.
+    TICKETS_DIR=$(find_tickets_dir 2>/dev/null) || TICKETS_DIR=""
     export TICKETS_DIR
     exec python3 "$source_dir/plugins/ticket-view" "$@"
 }
@@ -1398,7 +1400,7 @@ fi
 
 # Initialize tickets dir for built-in commands (skip for help)
 case "${1:-help}" in
-    help|--help|-h) ;;
+    help|--help|-h|view) ;;
     *) init_tickets_dir "${1:-}" || exit 1 ;;
 esac
 
