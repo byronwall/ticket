@@ -157,9 +157,9 @@ status disagrees with its linked tickets or milestones.
 The **Board** tab lays initiatives out in one column per status. Drag a card to
 another column to change its status; a toast offers Undo for five seconds.
 Right-click a card, or press Shift+F10 on it, to pick a status from the keyboard.
-Each column's **Prompt** button copies one prompt that lists every card in it, and
-the Completed and Cancelled columns add **Retire**, which copies a prompt
-approving retirement of those initiatives. Cards show the next action, phase,
+Each column's **⋯** menu copies one prompt that lists every card in it, and the
+Completed and Cancelled columns add **Copy retire prompt**, which approves
+retirement of those initiatives. Cards show the next action, phase,
 and dependency counts.
 
 To reference several initiatives at once, Cmd-click (or Ctrl- or Shift-click)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.9.2
+# tk-plugin-version: 1.10.0
 
 """Local ticket graph with status updates. Python 3 standard library only."""
 
@@ -229,7 +229,7 @@ PAGE = r"""<!doctype html>
   .idetail-title .ibutton { flex: none; margin-top: 2px; }
   .idetail-head h2 { flex: 1 1 18rem; max-width: 30ch; margin: 0; font-size: 28px; font-weight: 680; line-height: 1.18; letter-spacing: -0.022em; text-wrap: balance; }
   .idetail-summary { max-width: 72ch; margin: 8px 0 0; color: var(--ink-2); font-size: 16.5px; line-height: 1.55; text-wrap: pretty; }
-  .idetail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 14px; color: var(--ink-2); font-size: 13.5px; }
+  .idetail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 24px; margin-top: 16px; color: var(--ink-2); font-size: 13.5px; }
   .idetail-meta .status { color: var(--ink); font-weight: 550; }
   .idetail-path { display: block; max-width: 100%; margin: 0 0 8px; padding: 0; border: 0; background: none; color: var(--ink-3); font: 12.5px var(--mono); overflow-wrap: anywhere; text-align: left; cursor: copy; }
   .idetail-path:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
@@ -365,7 +365,7 @@ PAGE = r"""<!doctype html>
   .inav-meta .life::before { display: none; }
   .inav-meta .life { color: color-mix(in srgb, var(--life) 72%, var(--ink)); }
   .ichip-add .icon { width: 12px; height: 12px; }
-  .life-button.inferred { border-style: dashed; background: var(--surface); font-weight: 450; }
+  .life-button.inferred { font-style: italic; font-weight: 450; }
   .life[data-life="cancelled"] { text-decoration: line-through; text-decoration-color: var(--line-2); }
   .chip-count { color: var(--ink-3); font-size: 11.5px; font-weight: 400; font-variant-numeric: tabular-nums; }
   .sort-label { display: inline-flex; align-items: center; gap: 6px; justify-self: start; color: var(--ink-3); font-size: 12.5px; }
@@ -460,12 +460,15 @@ PAGE = r"""<!doctype html>
   .ibutton.on { border-color: #a9c4e6; background: var(--accent-soft); color: var(--accent); }
   .ibutton.small { height: 28px; padding: 0 10px; font-size: 13px; }
   .idetail-actions { display: flex; flex-wrap: wrap; gap: 6px; flex: none; margin-top: 2px; }
-  .meta-button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 13.5px; font-weight: 550; cursor: pointer; }
-  .meta-button:hover, .meta-button[aria-expanded="true"] { border-color: var(--line-2); background: var(--sunken); }
+  .meta-button { display: inline-flex; align-items: center; gap: 6px; height: 28px; margin: 0 -8px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--ink); font-size: 14px; font-weight: 550; cursor: pointer; }
+  .meta-button:hover, .meta-button[aria-expanded="true"] { background: var(--sunken); }
+  .meta-button .icon { opacity: 0; transition: opacity .12s; }
+  .meta-button:hover .icon, .meta-button:focus-visible .icon { opacity: 1; }
   .icon { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .bcolumn-menu .icon { stroke-width: 2.6; }
   .meta-button .icon { width: 12px; height: 12px; margin: 0 -2px 0 -1px; color: var(--ink-3); }
-  .life-button { border-color: color-mix(in srgb, var(--life) 45%, white); background: color-mix(in srgb, var(--life) 9%, white); }
-  .life-button:hover { background: color-mix(in srgb, var(--life) 16%, white); border-color: color-mix(in srgb, var(--life) 60%, white); }
+  .life-button { color: color-mix(in srgb, var(--life) 70%, var(--ink)); }
+  .meta-button:not(.life-button) { color: var(--ink-2); font-weight: 500; }
   .meta-text { color: var(--ink-2); }
   .meta-run { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 0; color: var(--ink-2); }
   .meta-run > * + *::before { content: "·"; margin: 0 8px; color: var(--ink-3); }
@@ -481,20 +484,22 @@ PAGE = r"""<!doctype html>
   .inext-form textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--accent); border-radius: 7px; font: inherit; font-size: 14.5px; line-height: 1.5; color: var(--ink); resize: vertical; }
   .inext-form textarea:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 0; }
   .inext-actions { display: flex; align-items: center; gap: 6px; }
-  .irelations { display: grid; gap: 6px; margin-top: 8px; }
+  .irelations { display: grid; gap: 4px; margin-top: 6px; }
   .irel-row { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); align-items: start; gap: 12px; }
-  .irel-list { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-height: 28px; }
-  .ichip { display: inline-flex; align-items: stretch; max-width: 100%; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); overflow: hidden; }
-  .ichip-open { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 10px; border: 0; background: none; color: var(--ink); font-size: 14px; cursor: pointer; }
-  .ichip-open:hover { background: var(--accent-soft); color: var(--accent); }
-  .ichip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34ch; }
-  .ichip-remove { display: inline-grid; place-items: center; padding: 0 8px 0 6px; border: 0; border-left: 1px solid var(--line); background: none; color: var(--ink-3); cursor: pointer; }
+  .irel-list { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 18px; min-height: 28px; padding-top: 3px; }
+  .ichip { display: inline-flex; align-items: baseline; max-width: 100%; min-width: 0; }
+  .ichip-open { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; padding: 0; border: 0; background: none; color: var(--ink); font-size: 14.5px; line-height: 1.6; text-align: left; cursor: pointer; }
+  .ichip-open .life-dot { transform: translateY(-1px); }
+  .ichip-open:hover .ichip-name { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); text-underline-offset: 3px; }
+  .ichip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40ch; }
+  .ichip-remove { display: inline-grid; place-items: center; align-self: center; width: 20px; height: 20px; margin-left: 2px; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--ink-3); opacity: 0; cursor: pointer; transition: opacity .12s; }
+  .ichip:hover .ichip-remove, .ichip-remove:focus-visible { opacity: 1; }
   .ichip-remove .icon { width: 11px; height: 11px; stroke-width: 2; }
   .ichip-remove:hover { background: #fdecea; color: var(--danger); }
-  .ichip.missing { border-style: dashed; color: var(--ink-3); }
-  .ichip.missing .ichip-name { padding: 3px 10px; font: 12.5px var(--mono); }
-  .ichip-add { display: inline-flex; align-items: center; gap: 4px; height: 27px; padding: 0 10px 0 8px; border: 1px dashed var(--line-2); border-radius: 999px; background: none; color: var(--ink-2); font-size: 13px; cursor: pointer; }
-  .ichip-add:hover, .ichip-add[aria-expanded="true"] { border-style: solid; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .ichip.missing .ichip-name { color: var(--ink-3); font: 13px/1.6 var(--mono); }
+  .ichip-add { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--ink-3); font-size: 14px; line-height: 1.6; cursor: pointer; }
+  .ichip-add:hover, .ichip-add[aria-expanded="true"] { color: var(--accent); }
+  .irel-none { color: var(--ink-3); font-size: 14.5px; line-height: 1.6; }
   #ticket-menu button[data-life] .life-dot { margin-right: 2px; }
   .tree { margin: 0; padding: 0; list-style: none; }
   .tree .tree { padding-left: 12px; margin-left: 7px; border-left: 1px solid var(--line); }
@@ -513,37 +518,39 @@ PAGE = r"""<!doctype html>
   .tree-folder > summary:hover { background: var(--sunken); color: var(--ink); }
   .tree-count { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
   .rail-tree { max-height: 42vh; margin: 0 0 18px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
-  #board-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--canvas); }
-  .board-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
-  #board-search { width: min(320px, 100%); height: 32px; padding: 0 10px 0 32px; border: 1px solid var(--line-2); border-radius: 8px; font: inherit; font-size: 14px; color: var(--ink);
+  #board-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #f5f6f8; }
+  .board-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 20px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  #board-search { width: min(300px, 100%); height: 32px; padding: 0 10px 0 32px; border: 1px solid var(--line-2); border-radius: 8px; font: inherit; font-size: 14px; color: var(--ink);
     background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%235d6a79' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5 14 14'/%3E%3C/svg%3E") 10px center / 14px no-repeat; }
   #board-search:focus-visible { outline-offset: 0; border-color: var(--accent); }
   .board-hint { margin-left: auto; color: var(--ink-3); font-size: 12.5px; }
-  #board-columns { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 14px 16px 16px; overflow-x: auto; scrollbar-width: thin; }
-  .bcolumn { flex: 1 0 272px; max-width: 380px; min-height: 0; display: flex; flex-direction: column; border-radius: 10px; background: #eaedf1; transition: background .15s, box-shadow .15s; }
-  .bcolumn.empty { flex: 0 0 190px; }
-  .bcolumn.drop { background: color-mix(in srgb, var(--life) 9%, #eaedf1); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--life) 50%, white); }
-  .bcolumn-head { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 10px 6px 13px; }
-  .bcolumn-head h3 { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 13.5px; font-weight: 650; letter-spacing: -0.005em; }
-  .bcolumn-head .chip-count { font-size: 12.5px; }
-  .bcolumn-action { height: 24px; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--ink-2); font-size: 12px; font-weight: 550; cursor: pointer; }
-  .bcolumn-action:first-of-type { margin-left: auto; }
-  .bcolumn-action:hover { color: var(--accent); border-color: #a9c4e6; background: var(--accent-soft); }
-  .bcolumn-cards { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 7px; padding: 2px 8px 10px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
-  .bcolumn-empty { margin: 2px 0; padding: 22px 8px; border: 1px dashed var(--line-2); border-radius: 8px; color: var(--ink-3); font-size: 12.5px; text-align: center; }
-  .bcard { display: grid; gap: 6px; padding: 11px 12px 10px; border: 1px solid #dfe3e8; border-radius: 8px; background: var(--surface); box-shadow: 0 1px 2px #17212c0d; cursor: grab; transition: box-shadow .15s, border-color .15s; }
-  .bcard:hover { border-color: var(--line-2); box-shadow: 0 3px 10px #17212c14, 0 1px 2px #17212c0d; }
+  #board-columns { flex: 1; min-height: 0; display: flex; gap: 20px; padding: 6px 20px 20px; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+  .bcolumn { position: relative; flex: 1 0 280px; max-width: 360px; min-height: 0; display: flex; flex-direction: column; }
+  .bcolumn.empty { flex: 0 1 220px; min-width: 180px; }
+  .bcolumn::after { content: ""; position: absolute; inset: 44px -8px -8px; border-radius: 10px; pointer-events: none; transition: background .15s, box-shadow .15s; }
+  .bcolumn.drop::after { background: color-mix(in srgb, var(--life) 7%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--life) 45%, transparent); }
+  .bcolumn-head { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 2px; }
+  .bcolumn-head h3 { display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--ink); font-size: 13.5px; font-weight: 640; letter-spacing: -0.005em; }
+  .bcolumn-head .chip-count { font-size: 13px; font-weight: 500; }
+  .bcolumn-menu { display: inline-grid; place-items: center; width: 26px; height: 26px; margin-left: auto; border: 0; border-radius: 6px; background: none; color: var(--ink-3); cursor: pointer; }
+  .bcolumn-menu .icon { width: 15px; height: 15px; }
+  .bcolumn-menu:hover, .bcolumn-menu[aria-expanded="true"] { background: #e7eaee; color: var(--ink); }
+  .bcolumn-cards { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; margin: 0 -6px; padding: 2px 6px 12px; overflow-y: auto; scrollbar-width: none; }
+  .bcolumn-empty { margin: 0; padding: 28px 12px; border: 1px dashed #cfd5dc; border-radius: 10px; color: var(--ink-3); font-size: 12.5px; text-align: center; }
+  .bcard { position: relative; display: grid; gap: 7px; padding: 12px 14px 11px; border: 1px solid #e1e5ea; border-radius: 10px; background: var(--surface); box-shadow: 0 1px 2px #17212c0a; cursor: grab; transition: box-shadow .18s, border-color .18s, transform .18s; }
+  .bcard:hover { border-color: #d3d9e0; box-shadow: 0 4px 14px #17212c12, 0 1px 3px #17212c0d; }
   .bcard:active { cursor: grabbing; }
-  .bcard:focus-visible { outline-offset: 1px; }
-  .bcard.picked { border-color: #8fb3e3; box-shadow: 0 0 0 1px #8fb3e3, 0 1px 2px #17212c0d; background: #f6f9fe; }
+  .bcard:focus-visible { outline-offset: 2px; }
+  .bcard.picked { border-color: #8fb3e3; background: #f7faff; box-shadow: 0 0 0 1px #8fb3e3, 0 2px 6px #17212c0f; }
   .bcard.inferred { border-style: dashed; }
-  .bcard.dragging { opacity: .4; }
-  .bcard-top { display: flex; align-items: flex-start; gap: 8px; }
-  .bcard .pick-slot { margin-top: 1px; }
-  .bcard-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 620; line-height: 1.32; }
-  .bcard-next { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.45; }
+  .bcard.dragging { opacity: .35; }
+  .bcard-title { padding-right: 20px; color: var(--ink); font-size: 14px; font-weight: 600; line-height: 1.35; text-wrap: pretty; }
+  .bcard > .pick-slot { position: absolute; top: 12px; right: 12px; }
+  .bcard > .pick-slot .life-dot { display: none; }
+  .bcard-next { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.5; }
   .bcard-next.muted { color: var(--ink-3); }
-  .bcard .inav-meta { margin-top: 1px; font-size: 12px; }
+  .bcard-foot { display: flex; align-items: center; gap: 6px 10px; padding-top: 8px; border-top: 1px solid #eef0f3; color: var(--ink-3); font-size: 12px; }
+  .bcard-foot .inav-edited { margin-left: auto; }
   body.board-view { height: 100vh; }
   @media (max-width: 1320px) {
     .idetail-body, .idetail-body.wide { grid-template-columns: minmax(0, 46rem); }
@@ -597,6 +604,9 @@ PAGE = r"""<!doctype html>
     .entries { grid-template-columns: minmax(0, 1fr); }
     .entry-main { grid-column: 1 / -1; }
     .inext, .irel-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    .irelations { gap: 12px; margin-top: 12px; }
+    .iact { grid-template-columns: 3.6rem minmax(0, 1fr); }
+    .iact-event { display: none; }
     .inext-label, .irel-label { padding-top: 0; }
     .inext-text { margin-left: -8px; }
     .board-tools { padding: 10px 12px; }
@@ -2196,7 +2206,7 @@ function ago(ms) {
   return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: new Date(ms).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
 }
 const fresh = item => Date.now() - item.modified < 864e5;
-const ICONS = { chevron: 'M4 6l4 4 4-4', x: 'M4.5 4.5l7 7M11.5 4.5l-7 7', back: 'M9.5 3.5 5 8l4.5 4.5', check: 'M3.5 8.5l3 3 6-7', plus: 'M8 3.5v9M3.5 8h9', table: 'M2.5 3.5h11v9h-11zM2.5 6.5h11M2.5 9.5h11M6.5 6.5v6', sidebar: 'M2.5 3.5h11v9h-11zM6.5 3.5v9' };
+const ICONS = { chevron: 'M4 6l4 4 4-4', x: 'M4.5 4.5l7 7M11.5 4.5l-7 7', back: 'M9.5 3.5 5 8l4.5 4.5', check: 'M3.5 8.5l3 3 6-7', plus: 'M8 3.5v9M3.5 8h9', table: 'M2.5 3.5h11v9h-11zM2.5 6.5h11M2.5 9.5h11M6.5 6.5v6', sidebar: 'M2.5 3.5h11v9h-11zM6.5 3.5v9', more: 'M3.5 8h.01M8 8h.01M12.5 8h.01', copy: 'M5.5 5.5v-2h7v7h-2M3.5 5.5h7v7h-7z' };
 function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 16 16');
@@ -2356,6 +2366,31 @@ function openChoiceMenu(trigger, heading, options, onPick) {
   ticketMenu.style.left = Math.max(8, Math.min(rect.left, innerWidth - ticketMenu.offsetWidth - 8)) + 'px';
   ticketMenu.style.top = Math.max(8, rect.bottom + ticketMenu.offsetHeight + 8 > innerHeight ? rect.top - ticketMenu.offsetHeight - 4 : rect.bottom + 4) + 'px';
   ticketMenu.querySelector('button:not(:disabled)')?.focus();
+}
+// A menu of one-shot actions, such as copying a prompt.
+function openActionMenu(trigger, heading, actions) {
+  closeDocMenu(false);
+  ticketMenu.setAttribute('role', 'menu');
+  ticketMenu.setAttribute('aria-label', heading);
+  ticketMenu.replaceChildren(menuHeading(heading));
+  for (const action of actions) {
+    const button = make('button', '', action.label);
+    button.type = 'button';
+    button.setAttribute('role', 'menuitem');
+    button.prepend(icon(action.icon || 'copy'));
+    button.addEventListener('click', () => { closeTicketMenu(); trigger.setAttribute('aria-expanded', 'false'); action.run(); });
+    ticketMenu.append(button);
+  }
+  menuReturn = trigger;
+  trigger.setAttribute('aria-expanded', 'true');
+  ticketMenu.hidden = false;
+  const rect = trigger.getBoundingClientRect();
+  ticketMenu.style.left = Math.max(8, Math.min(rect.right - ticketMenu.offsetWidth, innerWidth - ticketMenu.offsetWidth - 8)) + 'px';
+  ticketMenu.style.top = rect.bottom + 4 + 'px';
+  ticketMenu.querySelector('button')?.focus();
+}
+async function copyWithToast(text, message) {
+  try { await navigator.clipboard.writeText(text); showToast(message); } catch { showToast('Copy failed'); }
 }
 function lifecycleMenu(item, trigger) {
   const { key, inferred } = lifecycle(item);
@@ -3148,7 +3183,7 @@ function renderInitiativeDetail() {
     button.addEventListener('click', remove);
     missing.append(button);
     return missing;
-  }), add);
+  }).concat(deps.length ? [] : [make('span', 'irel-none', 'None')]), add);
   const needed = neededBy(item);
   if (needed.length) relationRow('Needed by', needed.map(other => initiativeChip(other)));
   const related = relatedTo(item);
@@ -3382,12 +3417,10 @@ function boardCard(item) {
   card.setAttribute('aria-label', info.title + ', ' + LIFE_LABEL[life.key] + '. Enter opens, X selects, Shift+F10 changes status.');
   if (picked.has(item.path)) card.classList.add('picked');
   if (life.inferred) card.classList.add('inferred');
-  const top = make('div', 'bcard-top');
-  top.append(pickSlot(item), make('span', 'bcard-title', info.title));
-  card.append(top);
+  card.append(make('div', 'bcard-title', info.title), pickSlot(item));
   if (info.next_action) card.append(make('p', 'bcard-next', info.next_action));
   else if (info.summary) card.append(make('p', 'bcard-next muted', info.summary));
-  const meta = make('div', 'inav-meta');
+  const meta = make('div', 'bcard-foot');
   if (info.current_phase) meta.append(make('span', '', humanize(info.current_phase)));
   if (life.inferred) { const tag = make('span', 'inferred-tag', 'Inferred'); tag.title = 'Not recorded in the map. Inferred from linked work: ' + item.status + '.'; meta.append(tag); }
   const waits = waitingOn(item);
@@ -3440,20 +3473,17 @@ function renderBoard() {
     name.prepend(make('span', 'life-dot'));
     head.append(name, make('span', 'chip-count', String(items.length)));
     if (items.length) {
-      const copy = make('button', 'bcolumn-action');
-      copy.type = 'button';
-      copy.title = `Copy one prompt for the ${items.length} ${label.toLowerCase()} initiatives`;
-      copy.append(make('span', 'label', 'Prompt'));
-      copy.addEventListener('click', () => copyText(groupPrompt(items, label.toLowerCase()), copy));
-      head.append(copy);
-      if (FINISHED.has(key)) {
-        const retire = make('button', 'bcolumn-action');
-        retire.type = 'button';
-        retire.title = `Copy a prompt that retires the ${items.length} ${label.toLowerCase()} initiatives`;
-        retire.append(make('span', 'label', 'Retire'));
-        retire.addEventListener('click', () => copyText(retirePrompt(items), retire));
-        head.append(retire);
-      }
+      const more = make('button', 'bcolumn-menu');
+      more.type = 'button';
+      more.title = label + ' actions';
+      more.setAttribute('aria-label', label + ' actions');
+      more.setAttribute('aria-haspopup', 'menu');
+      more.append(icon('more'));
+      const noun = `${items.length} ${label.toLowerCase()} initiative${items.length === 1 ? '' : 's'}`;
+      const actions = [{ label: 'Copy prompt for ' + noun, run: () => copyWithToast(groupPrompt(items, label.toLowerCase()), 'Copied a prompt for ' + noun) }];
+      if (FINISHED.has(key)) actions.push({ label: 'Copy retire prompt', run: () => copyWithToast(retirePrompt(items), 'Copied a retire prompt for ' + noun) });
+      more.addEventListener('click', () => ticketMenu.hidden || menuReturn !== more ? openActionMenu(more, label, actions) : closeTicketMenu());
+      head.append(more);
     }
     const cards = make('div', 'bcolumn-cards');
     for (const item of items) cards.append(boardCard(item));
