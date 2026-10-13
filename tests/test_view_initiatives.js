@@ -27,24 +27,25 @@ assert.deepEqual(run("(() => { const used = new Map(); return ['First proof', 'F
 
 // The URL fragment restores the tab, initiative, document and list filters.
 const states = [
-  { tab: 'tickets', choice: null, doc: '', show: '', sort: '', query: '' },
-  { tab: 'initiatives', choice: null, doc: '', show: 'all', sort: 'title', query: 'chart grid' },
-  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/intent/a/shape-brief.md', show: '', sort: '', query: '' },
-  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/ui-defaults.md', show: 'active', sort: '', query: '' },
-  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'map', show: 'completed', sort: 'phase', query: '' },
-  { tab: 'board', choice: null, doc: '', show: '', sort: 'status', query: 'grid' },
-  { tab: 'tickets', choice: '', doc: 'intent-brief.md', show: '', sort: '', query: '' },
+  { tab: 'tickets', choice: null, doc: '', show: '', sort: '', layout: '', query: '' },
+  { tab: 'initiatives', choice: null, doc: '', show: 'all', sort: 'title', layout: 'table', query: 'chart grid' },
+  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/intent/a/shape-brief.md', show: '', sort: '', layout: '', query: '' },
+  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/ui-defaults.md', show: 'active', sort: '', layout: '', query: '' },
+  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'map', show: 'completed', sort: 'phase', layout: '', query: '' },
+  { tab: 'board', choice: null, doc: '', show: '', sort: 'status', layout: '', query: 'grid' },
+  { tab: 'tickets', choice: '', doc: 'intent-brief.md', show: '', sort: '', layout: '', query: '' },
 ];
 for (const state of states) {
   const hash = run('formatViewState(' + JSON.stringify(state) + ')');
   assert.deepEqual(run('parseViewState(' + JSON.stringify(hash) + ')'), state, hash);
 }
-const blank = { tab: 'tickets', choice: null, doc: '', show: '', sort: '', query: '' };
+const blank = { tab: 'tickets', choice: null, doc: '', show: '', sort: '', layout: '', query: '' };
 assert.equal(run('formatViewState(' + JSON.stringify(blank) + ')'), '');
 assert.equal(run('formatViewState(' + JSON.stringify({ ...blank, tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/intent/a/shape-brief.md' }) + ')'), '#view=initiatives&i=docs/intent/a&d=shape-brief.md');
 assert.equal(run('formatViewState(' + JSON.stringify({ ...blank, tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/ui-defaults.md' }) + ')'), '#view=initiatives&i=docs/intent/a&d=/docs/ui-defaults.md');
 // Unknown filters and sorts fall back to the defaults.
-assert.deepEqual(run("parseViewState('#view=board&show=started&sort=size')"), { ...blank, tab: 'board' });
+assert.deepEqual(run("parseViewState('#view=board&show=started&sort=size&layout=grid')"), { ...blank, tab: 'board' });
+assert.equal(run('formatViewState(' + JSON.stringify({ ...blank, tab: 'initiatives', layout: 'table' }) + ')'), '#view=initiatives&layout=table');
 
 // Search highlights every match, merging ranges that touch or overlap.
 assert.deepEqual(run("matchRanges('Chart grid charting', ['chart', 'art g'])"), [[0, 7], [11, 16]]);

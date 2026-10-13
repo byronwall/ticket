@@ -135,12 +135,19 @@ bands or pool columns. Use `tk view --no-open` to print the URL without opening 
 
 The **Initiatives** tab is a reader for the project's `initiative-map.json`
 files and the Markdown documents beside them. The list on the left has a search
-box, a status filter (**Open**, each status, or **All**), and a sort: **Recently
-edited** (the newest change to the map or any of its documents, the default),
-**Title**, **Status**, or **Phase**. Open hides completed and cancelled work. Each row
-shows its status, phase, how long ago it was edited, and a dot when it changed in
-the last day. Press `/` to search, and use the arrow keys to move through the list.
-Matching text in titles, summaries, and next actions is highlighted.
+box, a status menu (**Open**, each status with its count, or **All**), and a sort:
+**Recently edited** (the newest change to the map or any of its documents, the
+default), **Title**, **Status**, or **Phase**. Open hides completed and cancelled
+work. Each row shows its status, phase, how long ago it was edited, and a dot when
+it changed in the last day. Press `/` to search, and use the arrow keys to move
+through the list. Matching text in titles, summaries, and next actions is
+highlighted.
+
+**Table** (or `T`) expands the list into a full-width table with the summary,
+status, phase, next action, dependencies, latest history entry, and edit time of
+each initiative. The search, status menu, sort, and selection carry over, and the
+Initiative, Status, Phase, and Edited headers sort. Click a row to open it in the
+reader; **Reader** or Back returns to the table.
 
 Status is the map's `initiative.status`: planned, active, paused, completed, or
 cancelled. A map without one shows a status inferred from its work evidence, in
@@ -167,7 +174,8 @@ change it, and click the next action to edit it in place (Enter saves, Escape
 cancels). **Depends on** lists the initiatives this one waits on, stored as slugs
 in `initiative.depends_on`; **Add** picks another initiative, and a dependency
 that would create a cycle is refused. **Needed by** and **Related** (from
-`related_initiatives`) appear when they apply. Every edit sets
+`related_initiatives`) appear when they apply. **Activity** shows the three newest
+history entries; **All N entries** opens the full history in the map. Every edit sets
 `last_updated`, appends a history entry, keeps the file's indentation, and is
 refused if the map changed since the page last read it.
 
@@ -189,7 +197,7 @@ folder, its map, and the open document. It ends with a `---` line, ready for you
 comments. Completed and cancelled initiatives also offer **Copy retire prompt**.
 Click the folder path above the title to copy its full path.
 
-The tab, selected initiative, open document, search, filter, and sort are stored
+The tab, selected initiative, open document, search, filter, sort, and table layout are stored
 in the URL, so a refresh returns to the same place. The reading position is
 restored as well.
 

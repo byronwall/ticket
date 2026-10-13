@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.8.0
+# tk-plugin-version: 1.9.0
 
 """Local ticket graph with status updates. Python 3 standard library only."""
 
@@ -365,14 +365,66 @@ PAGE = r"""<!doctype html>
   .ichip-add .icon { width: 12px; height: 12px; }
   .life-button.inferred { border-style: dashed; background: var(--surface); font-weight: 450; }
   .life[data-life="cancelled"] { text-decoration: line-through; text-decoration-color: var(--line-2); }
-  .chipset { display: flex; gap: 3px; margin: 0 -14px; padding: 0 14px; overflow-x: auto; scrollbar-width: none; -webkit-mask: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 22px), transparent); mask: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 22px), transparent); }
-  .chipset::-webkit-scrollbar { display: none; }
-  .chipset button { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink-2); font-size: 12.5px; white-space: nowrap; cursor: pointer; }
-  .chipset button:hover { border-color: var(--line-2); color: var(--ink); }
-  .chipset button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--life) 55%, white); background: color-mix(in srgb, var(--life) 11%, white); color: var(--ink); font-weight: 620; }
-  .chipset button[data-life="open"], .chipset button[data-life="all"] { --life: var(--accent); }
   .chip-count { color: var(--ink-3); font-size: 11.5px; font-weight: 400; font-variant-numeric: tabular-nums; }
   .sort-label { display: inline-flex; align-items: center; gap: 6px; justify-self: start; color: var(--ink-3); font-size: 12.5px; }
+  .inav-controls { display: flex; align-items: center; gap: 6px; }
+  .inav-controls .sort-label { min-width: 0; }
+  .inav-controls .sort-select { max-width: 150px; }
+  .layout-toggle { margin-left: auto; }
+  .tool-button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 12.5px; font-weight: 550; white-space: nowrap; cursor: pointer; box-shadow: 0 1px 1px #17212c0a; }
+  .tool-button:hover { border-color: var(--line-2); }
+  .tool-button .icon { width: 13px; height: 13px; color: var(--ink-3); }
+  .tool-button .chip-count { margin-left: -1px; }
+  #initiative-status .icon { width: 11px; height: 11px; margin: 0 -2px 0 -1px; }
+  .layout-toggle[aria-pressed="true"] { border-color: #a9c4e6; background: var(--accent-soft); color: var(--accent); }
+  .layout-toggle[aria-pressed="true"] .icon { color: var(--accent); }
+  .menu-count { margin-left: auto; padding-left: 16px; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #ticket-menu button:disabled .menu-count { color: inherit; }
+  .iact-list { display: grid; gap: 3px; padding-top: 3px; min-width: 0; }
+  .iact { display: grid; grid-template-columns: 4.6rem minmax(0, max-content) auto; justify-content: start; align-items: baseline; gap: 10px; max-width: 72ch; font-size: 14px; line-height: 1.45; }
+  .iact-date { color: var(--ink-3); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .iact-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+  .iact-event { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+  .iact-more { justify-self: start; margin-top: 2px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 13px; cursor: pointer; }
+  .iact-more:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .iact.compact { grid-template-columns: minmax(0, 1fr); gap: 0; font-size: 13px; }
+  .iact.compact .iact-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; color: var(--ink-2); }
+  .iact.compact .iact-event { display: none; }
+  #initiative-table { flex: 1; min-height: 0; overflow: auto; background: var(--surface); scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+  .itable { width: 100%; min-width: 1100px; border-collapse: separate; border-spacing: 0; font-size: 13.5px; line-height: 1.45; }
+  .itable th { position: sticky; top: 0; z-index: 1; padding: 0 12px; height: 36px; border-bottom: 1px solid var(--line); background: #f8f9fb; color: var(--ink-3); font-size: 12px; font-weight: 600; text-align: left; white-space: nowrap; }
+  .th-sort { display: inline-flex; align-items: center; gap: 4px; margin: 0 -4px; padding: 3px 4px; border: 0; border-radius: 4px; background: none; color: inherit; font: inherit; cursor: pointer; }
+  .th-sort:hover { color: var(--ink); background: var(--sunken); }
+  [aria-sort="ascending"] .th-sort, [aria-sort="descending"] .th-sort { color: var(--ink); }
+  .th-sort .icon { width: 10px; height: 10px; }
+  [aria-sort="ascending"] .th-sort .icon { transform: rotate(180deg); }
+  .itable td { padding: 11px 12px; border-bottom: 1px solid #eceff2; vertical-align: top; }
+  .itable tbody tr { cursor: pointer; }
+  .itable tbody tr:hover td { background: #f8fafc; }
+  .itable tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .itable tr.picked td { background: #f2f7fd; }
+  .itable tr[aria-current="true"] td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+  .itable th:first-child, .itable td.t-pick { width: 40px; padding-right: 0; padding-left: 16px; }
+  .itable td.t-pick { padding-top: 13px; }
+  .itable tbody tr:hover .pick-slot .inav-check, .itable.picking .pick-slot .inav-check { opacity: 1; }
+  .itable tbody tr:hover .pick-slot .life-dot, .itable.picking .pick-slot .life-dot, .itable tr.picked .pick-slot .life-dot { opacity: 0; }
+  .t-main { width: 30%; min-width: 280px; }
+  .t-name { display: flex; align-items: baseline; gap: 7px; }
+  .t-title { font-size: 14.5px; font-weight: 620; line-height: 1.35; color: var(--ink); }
+  .t-summary { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; color: var(--ink-3); font-size: 13px; }
+  .itable mark { border-radius: 2px; background: #ffe9a8; color: inherit; }
+  .t-status { white-space: nowrap; }
+  .t-status .drift-badge { margin-left: 8px; }
+  .t-phase, .t-edited { color: var(--ink-2); white-space: nowrap; }
+  .t-edited { font-variant-numeric: tabular-nums; text-align: right; }
+  .itable th:last-child { text-align: right; padding-right: 18px; }
+  .itable td:last-child { padding-right: 18px; }
+  .t-next { width: 26%; color: var(--ink-2); }
+  .t-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .t-deps { white-space: nowrap; color: var(--ink-3); }
+  .t-deps .dep-badge + .dep-badge { margin-left: 4px; }
+  .t-activity { width: 22%; color: var(--ink-3); }
+  .t-activity .iact-date { display: block; margin-bottom: 1px; font-size: 12px; }
   .sort-select { height: 27px; padding: 0 24px 0 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 12.5px; color: var(--ink); cursor: pointer; appearance: none;
     background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%235d6a79' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E") right 7px center / 11px no-repeat; }
   .sort-select:hover { border-color: var(--line-2); }
@@ -501,6 +553,13 @@ PAGE = r"""<!doctype html>
     body.initiatives-view #initiatives-panel { display: contents; }
     body.initiatives-view #initiative-nav { grid-column: 1; grid-row: 2; }
     body.initiatives-view #initiative-detail { grid-column: 2; grid-row: 1 / -1; }
+    body.initiatives-view.initiatives-table { grid-template-columns: minmax(0, 1fr); }
+    body.initiatives-table > header { border-right: 0; }
+    body.initiatives-table #initiative-detail { display: none; }
+    body.initiatives-table #initiative-nav { border-right: 0; }
+    body.initiatives-table .inav-tools { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--surface); }
+    body.initiatives-table #initiative-search { width: 340px; }
+    body.initiatives-table .inav-controls { flex: 1; }
   }
   @media (max-width: 1100px) { main { --inspector-w: 340px; } }
   @media (max-width: 800px) {
@@ -515,7 +574,9 @@ PAGE = r"""<!doctype html>
     #details { padding: 16px 16px 28px; }
     #controls kbd { display: none; }
     #initiatives-panel { display: block; }
-    #initiatives-panel.detail-open #initiative-nav, #initiatives-panel:not(.detail-open) #initiative-detail { display: none; }
+    #initiatives-panel.detail-open #initiative-nav, #initiatives-panel:not(.detail-open) #initiative-detail, body.initiatives-table #initiative-detail { display: none; }
+    #initiative-table { overflow-x: auto; }
+    .inav-controls .sort-word { display: none; }
     #initiative-nav { border-right: 0; }
     #initiatives-panel:not(.detail-open) .inav-item[aria-current="true"] { border-color: transparent; background: none; box-shadow: none; }
     #initiative-list { overflow: visible; }
@@ -580,12 +641,16 @@ PAGE = r"""<!doctype html>
   <nav id="initiative-nav" aria-label="Initiatives">
     <div class="inav-tools">
       <input id="initiative-search" type="search" placeholder="Search initiatives" aria-label="Search initiatives" autocomplete="off" spellcheck="false">
-      <div id="initiative-show" class="chipset" role="group" aria-label="Filter by status"></div>
-      <label class="sort-label">Sort <select id="initiative-sort" class="sort-select" aria-label="Sort initiatives">
-        <option value="recent">Recently edited</option><option value="title">Title</option><option value="status">Status</option><option value="phase">Phase</option>
-      </select></label>
+      <div class="inav-controls">
+        <button id="initiative-status" class="tool-button" type="button" aria-haspopup="menu" title="Filter by status"></button>
+        <label class="sort-label"><span class="sort-word">Sort</span> <select id="initiative-sort" class="sort-select" aria-label="Sort initiatives">
+          <option value="recent">Recently edited</option><option value="title">Title</option><option value="status">Status</option><option value="phase">Phase</option>
+        </select></label>
+        <button id="initiative-layout" class="tool-button layout-toggle" type="button" aria-pressed="false"></button>
+      </div>
     </div>
     <ul id="initiative-list"></ul>
+    <div id="initiative-table" hidden></div>
     <div id="initiative-bar" class="pbar" aria-live="polite"></div>
   </nav>
   <div id="initiative-detail" tabindex="-1"></div>
@@ -1948,6 +2013,7 @@ function parseViewState(hash) {
     doc: folder === null || !doc ? '' : doc === 'map' ? 'map' : doc.startsWith('/') ? doc.slice(1) : base + doc,
     show: SHOW_KEYS.includes(params.get('show')) ? params.get('show') : '',
     sort: SORT_KEYS.includes(params.get('sort')) ? params.get('sort') : '',
+    layout: params.get('layout') === 'table' ? 'table' : '',
     query: params.get('q') || '',
   };
 }
@@ -1962,6 +2028,7 @@ function formatViewState(state) {
   }
   if (state.show) pairs.push(['show', state.show]);
   if (state.sort) pairs.push(['sort', state.sort]);
+  if (state.layout) pairs.push(['layout', state.layout]);
   if (state.query) pairs.push(['q', state.query]);
   return pairs.length ? '#' + pairs.map(([key, value]) => key + '=' + encodeURIComponent(value).replace(/%2F/g, '/')).join('&') : '';
 }
@@ -1993,7 +2060,7 @@ const initiativeList = document.querySelector('#initiative-list');
 const initiativeDetail = document.querySelector('#initiative-detail');
 const initiativeSearch = document.querySelector('#initiative-search');
 const boardSearch = document.querySelector('#board-search');
-let initiativeChoice = null, initiativeDoc = '', initiativeShow = '', initiativeSort = '', initiativeQuery = '';
+let initiativeChoice = null, initiativeDoc = '', initiativeShow = '', initiativeSort = '', initiativeLayout = '', initiativeQuery = '';
 let initiativeListSignature = '', initiativeDetailSignature = '', boardSignature = '', detailKey = '', pendingAnchor = '', loaded = false;
 let savedScroll = null, editingNext = false;
 try { savedScroll = JSON.parse(sessionStorage.getItem('tk-view-scroll')); } catch {}
@@ -2006,7 +2073,7 @@ function make(tag, className = '', text = '') {
   if (text !== '') element.textContent = text;
   return element;
 }
-const viewState = () => ({ tab: activeTab, choice: initiativeChoice, doc: initiativeDoc, show: initiativeShow, sort: initiativeSort, query: initiativeQuery });
+const viewState = () => ({ tab: activeTab, choice: initiativeChoice, doc: initiativeDoc, show: initiativeShow, sort: initiativeSort, layout: initiativeLayout, query: initiativeQuery });
 function writeViewState(push) {
   const hash = formatViewState(viewState());
   if (hash === location.hash) return;
@@ -2124,7 +2191,7 @@ function ago(ms) {
   return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: new Date(ms).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
 }
 const fresh = item => Date.now() - item.modified < 864e5;
-const ICONS = { chevron: 'M4 6l4 4 4-4', x: 'M4.5 4.5l7 7M11.5 4.5l-7 7', back: 'M9.5 3.5 5 8l4.5 4.5', check: 'M3.5 8.5l3 3 6-7', plus: 'M8 3.5v9M3.5 8h9' };
+const ICONS = { chevron: 'M4 6l4 4 4-4', x: 'M4.5 4.5l7 7M11.5 4.5l-7 7', back: 'M9.5 3.5 5 8l4.5 4.5', check: 'M3.5 8.5l3 3 6-7', plus: 'M8 3.5v9M3.5 8h9', table: 'M2.5 3.5h11v9h-11zM2.5 6.5h11M2.5 9.5h11M6.5 6.5v6', sidebar: 'M2.5 3.5h11v9h-11zM6.5 3.5v9' };
 function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 16 16');
@@ -2273,7 +2340,9 @@ function openChoiceMenu(trigger, heading, options, onPick) {
     button.setAttribute('aria-checked', String(!!option.checked));
     button.disabled = !!option.checked;
     if (option.life) { button.prepend(make('span', 'life-dot')); button.dataset.life = option.life; }
+    if (option.count !== undefined) button.append(make('span', 'menu-count', String(option.count)));
     button.addEventListener('click', () => onPick(option.key));
+    if (option.divider) ticketMenu.append(make('hr', 'menu-divider'));
     ticketMenu.append(button);
   }
   menuReturn = trigger;
@@ -2323,28 +2392,135 @@ function renderPromptBar(host, shown, label) {
     host.append(make('span', 'pbar-hint', '⌘-click to select'));
   }
 }
+// History entries, newest first. Entries without a date keep file order.
+function historyEntries(item) {
+  const list = Array.isArray(item.map.history) ? item.map.history : [];
+  return list.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry && typeof entry === 'object')
+    .sort((a, b) => String(b.entry.date || '').localeCompare(String(a.entry.date || '')) || b.index - a.index).map(({ entry }) => entry);
+}
+const HISTORY_TEXT = ['action', 'summary', 'change', 'description', 'notes', 'note', 'reason', 'outcome'];
+function historyText(entry) {
+  const key = HISTORY_TEXT.find(name => typeof entry[name] === 'string' && entry[name].trim());
+  return key ? entry[key] : typeof entry.event === 'string' ? humanize(entry.event) : '';
+}
+function compactDate(value) {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(typeof value === 'string' ? value : '');
+  if (!parts) return typeof value === 'string' ? value : '';
+  const date = new Date(+parts[1], parts[2] - 1, +parts[3]);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+}
+function activityLine(entry, className = 'iact') {
+  const row = make('div', className);
+  row.append(make('span', 'iact-date', compactDate(entry.date) || '—'));
+  const text = make('span', 'iact-text');
+  appendInline(text, historyText(entry));
+  row.append(text);
+  if (typeof entry.event === 'string' && HISTORY_TEXT.some(name => typeof entry[name] === 'string' && entry[name].trim())) row.append(make('span', 'iact-event', humanize(entry.event)));
+  return row;
+}
+function setLayout(layout) {
+  initiativeLayout = layout;
+  document.body.classList.toggle('initiatives-table', activeTab === 'initiatives' && layout === 'table');
+  closeTicketMenu();
+  closeDocMenu(false);
+  writeViewState(true);
+  renderInitiatives();
+}
+// The expanded list: one row per initiative with room for the next action and
+// the latest history entry. Column headers sort; a row opens the reader.
+const TABLE_COLUMNS = [['', ''], ['Initiative', 'title'], ['Status', 'status'], ['Phase', 'phase'], ['Next action', ''], ['Depends', ''], ['Last activity', ''], ['Edited', 'recent']];
+function renderInitiativeTable(visible, current) {
+  const host = document.querySelector('#initiative-table');
+  const focusedPath = document.activeElement?.closest?.('tr[data-path]')?.dataset.path;
+  const top = host.scrollTop, left = host.scrollLeft;
+  const table = make('table', 'itable' + (picked.size ? ' picking' : ''));
+  const head = make('thead'), headRow = make('tr');
+  for (const [label, sort] of TABLE_COLUMNS) {
+    const cell = make('th');
+    if (sort) {
+      const button = make('button', 'th-sort', label);
+      button.type = 'button';
+      const active = effectiveSort() === sort;
+      cell.setAttribute('aria-sort', active ? (sort === 'title' || sort === 'status' ? 'ascending' : 'descending') : 'none');
+      if (active) button.append(icon('chevron'));
+      button.addEventListener('click', () => { initiativeSort = sort === 'recent' ? '' : sort; writeViewState(false); renderInitiatives(); });
+      cell.append(button);
+    } else if (label) cell.textContent = label;
+    else cell.setAttribute('aria-label', 'Select');
+    headRow.append(cell);
+  }
+  head.append(headRow);
+  const body = make('tbody');
+  for (const item of visible) {
+    const info = item.map.initiative;
+    const row = make('tr');
+    row.dataset.path = item.path;
+    row.tabIndex = 0;
+    if (picked.has(item.path)) row.classList.add('picked');
+    if (item === current) row.setAttribute('aria-current', 'true');
+    const cell = (className, ...nodes) => { const td = make('td', className); td.append(...nodes); row.append(td); return td; };
+    cell('t-pick', pickSlot(item));
+    const name = make('div', 't-name');
+    name.append(highlighted('t-title', info.title));
+    if (fresh(item)) { const dot = make('span', 'fresh-dot'); dot.title = 'Edited in the last day'; name.append(dot); }
+    const titleCell = cell('t-main', name);
+    if (info.summary) titleCell.append(highlighted('t-summary', info.summary));
+    const statusCell = cell('t-status', lifeTag(item));
+    if (drift(item)) { const warn = make('span', 'drift-badge', 'Check'); warn.title = drift(item); statusCell.append(warn); }
+    cell('t-phase', info.current_phase ? humanize(info.current_phase) : '—');
+    const next = make('span', 't-clamp');
+    if (info.next_action) appendInline(next, info.next_action); else next.textContent = '—';
+    cell('t-next', next);
+    const deps = cell('t-deps');
+    const waits = waitingOn(item), needed = neededBy(item);
+    if (waits.length) { const tag = make('span', 'dep-badge', 'Waits on ' + waits.length); tag.title = waits.map(other => other.map.initiative.title).join(', '); deps.append(tag); }
+    if (needed.length) { const tag = make('span', 'dep-badge quiet', 'Blocks ' + needed.length); tag.title = needed.map(other => other.map.initiative.title).join(', '); deps.append(tag); }
+    if (!deps.children.length) deps.textContent = '—';
+    const last = historyEntries(item)[0];
+    const activity = cell('t-activity');
+    if (last) activity.append(activityLine(last, 'iact compact')); else activity.textContent = '—';
+    const edited = cell('t-edited', ago(item.modified));
+    edited.title = 'Last file change ' + new Date(item.modified).toLocaleString();
+    row.addEventListener('click', event => {
+      if (event.target.closest('input')) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey) { togglePicked(item); return; }
+      initiativeChoice = initiativeFolder(item);
+      initiativeDoc = '';
+      setLayout('');
+    });
+    row.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); row.click(); }
+      else if (event.key === 'x') { event.preventDefault(); togglePicked(item); }
+      else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); (event.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling)?.focus(); }
+    });
+    body.append(row);
+  }
+  table.append(head, body);
+  host.replaceChildren(table);
+  if (!visible.length) host.append(make('p', 'inav-empty', initiatives.length ? 'Nothing matches this search and filter.' : 'This project has no initiative-map.json files.'));
+  host.scrollTop = top;
+  host.scrollLeft = left;
+  if (focusedPath) host.querySelector(`tr[data-path="${CSS.escape(focusedPath)}"]`)?.focus();
+}
 const SHOW_LABELS = { open: 'Open', planned: 'Planned', active: 'Active', paused: 'Paused', completed: 'Completed', cancelled: 'Cancelled', all: 'All' };
 function renderInitiativeList() {
   const show = effectiveShow(), matching = matchingInitiatives(), visible = visibleInitiatives(), current = selectedInitiative();
-  const chips = document.querySelector('#initiative-show');
-  chips.replaceChildren();
-  for (const key of SHOW_KEYS) {
-    const count = matching.filter(item => showMatches(item, key)).length;
-    if (!count && !['open', 'all'].includes(key) && key !== show) continue;
-    const chip = make('button', '', SHOW_LABELS[key]);
-    chip.type = 'button';
-    chip.dataset.life = key;
-    chip.setAttribute('aria-pressed', String(key === show));
-    chip.append(make('span', 'chip-count', String(count)));
-    chip.addEventListener('click', () => { initiativeShow = key === 'open' ? '' : key; writeViewState(false); renderInitiatives(); });
-    chips.append(chip);
-  }
-  const pressed = chips.querySelector('[aria-pressed="true"]');
-  if (pressed) chips.scrollLeft = Math.max(0, pressed.offsetLeft + pressed.offsetWidth - chips.clientWidth + 22);
+  const statusButton = document.querySelector('#initiative-status');
+  statusButton.replaceChildren();
+  statusButton.dataset.life = show;
+  if (LIFE_LABEL[show]) statusButton.append(make('span', 'life-dot'));
+  statusButton.append(make('span', 'tool-label', SHOW_LABELS[show]), make('span', 'chip-count', String(visible.length)), icon('chevron'));
+  const layoutButton = document.querySelector('#initiative-layout');
+  layoutButton.replaceChildren(icon(initiativeLayout ? 'sidebar' : 'table'), make('span', 'tool-label', initiativeLayout ? 'Reader' : 'Table'));
+  layoutButton.setAttribute('aria-pressed', String(!!initiativeLayout));
+  layoutButton.title = initiativeLayout ? 'Back to the list and reader (T)' : 'Expand the list into a table (T)';
   document.querySelector('#initiative-sort').value = effectiveSort();
   renderPromptBar(document.querySelector('#initiative-bar'), visible, show === 'all' ? 'shown' : SHOW_LABELS[show].toLowerCase());
-  const signature = JSON.stringify([show, effectiveSort(), initiativeQuery, current?.path, [...picked], Math.floor(Date.now() / 60000), initiatives.length, visible.map(item => [item.path, item.status, item.modified, item.map.initiative])]);
+  initiativeList.hidden = !!initiativeLayout;
+  document.querySelector('#initiative-table').hidden = !initiativeLayout;
+  const signature = JSON.stringify([initiativeLayout, show, effectiveSort(), initiativeQuery, current?.path, [...picked], Math.floor(Date.now() / 60000), initiatives.length, visible.map(item => [item.path, item.status, item.modified, item.map.initiative, item.map.history?.length])]);
   if (signature === initiativeListSignature) return;
+  if (initiativeLayout) { initiativeListSignature = signature; renderInitiativeTable(visible, current); return; }
   const first = !initiativeListSignature;
   initiativeListSignature = signature;
   const focused = initiativeList.contains(document.activeElement);
@@ -2835,7 +3011,8 @@ function nextActionBlock(item) {
   return block;
 }
 function renderInitiativeDetail() {
-  initiativesPanel.classList.toggle('detail-open', initiativeChoice !== null);
+  initiativesPanel.classList.toggle('detail-open', initiativeChoice !== null && !initiativeLayout);
+  if (initiativeLayout) return;
   // Do not redraw over the next action while it is being typed.
   if (editingNext && initiativeDetail.contains(document.activeElement) && document.activeElement.closest('.inext-form')) return;
   const item = selectedInitiative();
@@ -2971,6 +3148,23 @@ function renderInitiativeDetail() {
   if (needed.length) relationRow('Needed by', needed.map(other => initiativeChip(other)));
   const related = relatedTo(item);
   if (related.length) relationRow('Related', related.map(other => initiativeChip(other)));
+  const history = historyEntries(item);
+  if (history.length) {
+    const lines = history.slice(0, 3).map(entry => activityLine(entry));
+    let more = null;
+    if (history.length > 3) {
+      more = make('button', 'iact-more', 'All ' + history.length + ' entries');
+      more.type = 'button';
+      more.title = 'Open the full history in the map';
+      more.addEventListener('click', () => openDoc('map', 'history'));
+    }
+    const row = make('div', 'irel-row');
+    const list = make('div', 'iact-list');
+    list.append(...lines);
+    if (more) list.append(more);
+    row.append(make('span', 'irel-label', 'Activity'), list);
+    relations.append(row);
+  }
   head.append(relations);
 
   closeDocMenu(false);
@@ -3116,6 +3310,14 @@ for (const input of [initiativeSearch, boardSearch]) {
     if (activeTab === 'board') renderBoard(); else renderInitiatives();
   });
 }
+document.querySelector('#initiative-status').addEventListener('click', event => {
+  const matching = matchingInitiatives(), show = effectiveShow();
+  openChoiceMenu(event.currentTarget, 'Show', SHOW_KEYS.map(key => ({
+    key, label: SHOW_LABELS[key], life: LIFE_LABEL[key] ? key : undefined, checked: key === show,
+    count: matching.filter(item => showMatches(item, key)).length, divider: key === 'planned' || key === 'all',
+  })), key => { closeTicketMenu(); initiativeShow = key === 'open' ? '' : key; writeViewState(false); renderInitiatives(); });
+});
+document.querySelector('#initiative-layout').addEventListener('click', () => setLayout(initiativeLayout ? '' : 'table'));
 for (const select of document.querySelectorAll('.sort-select')) {
   select.addEventListener('change', () => {
     initiativeSort = select.value === 'recent' ? '' : select.value;
@@ -3149,6 +3351,9 @@ document.addEventListener('keydown', event => {
     picked.clear();
     renderInitiatives();
     if (activeTab === 'board') renderBoard();
+    event.preventDefault();
+  } else if (event.key === 't' && activeTab === 'initiatives' && !event.target.closest('input, textarea, select, [contenteditable]')) {
+    setLayout(initiativeLayout ? '' : 'table');
     event.preventDefault();
   } else if (event.key === '/' && !event.target.closest('input, textarea, [contenteditable]')) {
     search.focus();
@@ -3271,6 +3476,7 @@ function switchTab(name, record = true) {
   activeTab = name;
   document.body.classList.toggle('initiatives-view', name === 'initiatives');
   document.body.classList.toggle('board-view', name === 'board');
+  document.body.classList.toggle('initiatives-table', name === 'initiatives' && initiativeLayout === 'table');
   if (record) writeViewState(true);
   document.querySelector('.app-name').textContent = { tickets: 'Ticket view', initiatives: 'Initiatives', board: 'Initiative board' }[name];
   document.title = document.querySelector('#project').textContent + ' · ' + document.querySelector('.app-name').textContent;
@@ -3306,6 +3512,7 @@ function applyViewState() {
   initiativeDoc = state.doc;
   initiativeShow = state.show;
   initiativeSort = state.sort;
+  initiativeLayout = state.layout;
   initiativeQuery = initiativeSearch.value = boardSearch.value = state.query;
   switchTab(state.tab, false);
 }
