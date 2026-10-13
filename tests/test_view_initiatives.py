@@ -1,8 +1,10 @@
 """Run with python3 tests/test_view_initiatives.py."""
 
 import json
+import os
 from pathlib import Path
 import runpy
+import subprocess
 from tempfile import TemporaryDirectory
 
 viewer = runpy.run_path(str(Path(__file__).parents[1] / 'plugins/ticket-view'))
@@ -126,3 +128,30 @@ with TemporaryDirectory() as temp:
     assert {item['slug']: item['map']['initiative'].get('depends_on') for item in items} == {'a': ['b'], 'b': []}
     assert all(item['modified'] > 0 and item['version'] for item in items)
 print('ticket view initiative edits: ok')
+
+with TemporaryDirectory() as temp:
+    root = Path(temp).resolve()
+    folder = root / 'docs' / 'intent' / 'dated'
+    folder.mkdir(parents=True)
+    (folder / 'initiative-map.json').write_text(json.dumps({'initiative': {'title': 'Dated'}, 'implementation': {}}))
+    (folder / 'intent-brief.md').write_text('# Brief\n')
+    git = lambda *args, **env: subprocess.run(['git', *args], cwd=root, check=True, capture_output=True, env={**os.environ, **env})
+    git('init', '-q')
+    git('add', '.')
+    stamp = '2020-01-02T03:04:05Z'
+    git('-c', 'user.name=T', '-c', 'user.email=t@example.com', 'commit', '-qm', 'docs', GIT_COMMITTER_DATE=stamp, GIT_AUTHOR_DATE=stamp)
+
+    def modified():
+        items, _ = viewer['initiatives_from'](root, [])
+        return items[0]['modified']
+
+    committed = 1577934245000
+    assert modified() == committed  # Checkout time does not count as an edit.
+    (folder / 'intent-brief.md').write_text('# Brief\n\nMore.\n')
+    assert modified() > committed  # Uncommitted edits use the file's modification time.
+    (folder / 'notes.md').write_text('# Notes\n')
+    git('checkout', '-q', '--', '.')
+    assert modified() > committed  # Untracked files count too.
+    (folder / 'notes.md').unlink()
+    assert modified() == committed
+print('ticket view initiative git times: ok')

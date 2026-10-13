@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.10.0
+# tk-plugin-version: 1.10.1
 
 """Local ticket graph with status updates. Python 3 standard library only."""
 
@@ -3700,8 +3700,73 @@ def documents_from(project, folder, artifacts):
     return documents
 
 
+class GitTimes:
+    """Commit times for files in a git checkout. A file with uncommitted
+    changes, or one git does not track, keeps its modification time. Results
+    are cached until HEAD or a file's modification time changes, so the
+    once-a-second poll usually costs one rev-parse."""
+
+    def __init__(self, project):
+        self.root = None
+        self.key = None
+        self.times = {}
+        self.lock = threading.Lock()
+        try:
+            result = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=project, capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                self.root = Path(result.stdout.strip()).resolve()
+        except OSError:
+            pass
+
+    def git(self, *args):
+        try:
+            result = subprocess.run(["git", "-c", "core.quotepath=off", *args], cwd=self.root, capture_output=True, text=True)
+        except OSError:
+            return None
+        return result.stdout if result.returncode == 0 else None
+
+    def lookup(self, folders):
+        specs = [folder.relative_to(self.root).as_posix() for folder in folders if folder == self.root or self.root in folder.parents]
+        if not specs:
+            return {}
+        log = self.git("log", "--format=%x00%ct", "--name-only", "--", *specs)
+        status = self.git("status", "--porcelain", "-z", "--untracked-files=all", "--", *specs)
+        if log is None or status is None:
+            return {}
+        times = {}
+        current = None
+        for line in log.splitlines():
+            if line.startswith("\0"):
+                current = int(line[1:]) * 1_000_000_000
+            elif line and current is not None:
+                times.setdefault(self.root / line, current)
+        entries = iter(status.split("\0"))
+        for entry in entries:
+            if len(entry) > 3:
+                times.pop(self.root / entry[3:], None)
+                if entry[0] in "RC":
+                    next(entries, None)  # The original path of a rename or copy.
+        return times
+
+    def modified(self, folders, files):
+        """Map each file in files ({path: mtime_ns}) to its commit time when it
+        is committed and unchanged, otherwise to its modification time."""
+        if self.root is None:
+            return dict(files)
+        with self.lock:
+            key = (self.git("rev-parse", "HEAD"), tuple(sorted((str(path), mtime) for path, mtime in files.items())))
+            if key != self.key:
+                self.times = self.lookup(sorted(set(folders)))
+                self.key = key
+            return {path: self.times.get(path, mtime) for path, mtime in files.items()}
+
+
+git_times = {}
+
+
 def initiatives_from(project, tickets):
     initiatives = []
+    stamps = {}
     errors = []
     for folder, dirs, files in os.walk(project):
         dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name not in SKIPPED_FOLDERS)
@@ -3769,6 +3834,9 @@ def initiatives_from(project, tickets):
             status, evidence = "No recorded start", "No linked tickets or map states show that work has started."
         documents = documents_from(project, path.parent.resolve(), data.get("artifacts"))
         version = path.stat().st_mtime_ns
+        stamps[path.resolve()] = version
+        for doc in documents:
+            stamps[(project / doc["path"]).resolve()] = int(doc["version"])
         initiatives.append({
             "path": relative,
             "slug": initiative_slug(path, info),
@@ -3778,9 +3846,14 @@ def initiatives_from(project, tickets):
             "tickets": [ticket["id"] for ticket in linked],
             "documents": documents,
             "version": str(version),
-            # Newest edit to the map or any of its documents, in milliseconds.
-            "modified": max([version] + [int(doc["version"]) for doc in documents]) // 1_000_000,
         })
+    if project not in git_times:
+        git_times[project] = GitTimes(project)
+    times = git_times[project].modified([(project / item["path"]).resolve().parent for item in initiatives], stamps)
+    for item in initiatives:
+        paths = [(project / item["path"]).resolve()] + [(project / doc["path"]).resolve() for doc in item["documents"]]
+        # Newest change to the map or any of its documents, in milliseconds.
+        item["modified"] = max(times[path] for path in paths) // 1_000_000
     initiatives.sort(key=lambda item: (item["status"] != "No recorded start", item["map"]["initiative"]["title"].casefold()))
     return initiatives, errors
 
