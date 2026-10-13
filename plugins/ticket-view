@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.7.0
+# tk-plugin-version: 1.8.0
 
 """Local ticket graph with status updates. Python 3 standard library only."""
 
@@ -15,6 +15,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+import time
 from urllib.parse import parse_qs, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import webbrowser
@@ -30,10 +31,10 @@ PAGE = r"""<!doctype html>
   :root {
     --ink: #17212c; --ink-2: #4a5868; --ink-3: #6b7888; --line: #dde2e8; --line-2: #c7cfd8;
     --canvas: #f3f5f7; --surface: #ffffff; --sunken: #f6f8fa; --accent: #1f63b8; --accent-soft: #e8f0fa;
-    --edge: #b3bdc9; --danger: #b42318;
+    --edge: #b3bdc9; --danger: #b42318; --warn: #8a4b04; --warn-soft: #fdf1e1;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--canvas);
-    accent-color: var(--accent);
+    accent-color: var(--accent); -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
   }
   * { box-sizing: border-box; }
   ::selection { background: #cfe0f5; }
@@ -182,10 +183,10 @@ PAGE = r"""<!doctype html>
   .markdown blockquote { margin: 10px 0; padding-left: 12px; border-left: 2px solid var(--line-2); color: var(--ink-2); }
   .markdown a { color: var(--accent); text-underline-offset: 2px; }
   [hidden] { display: none !important; }
-  #tabs { display: flex; gap: 2px; }
-  #tabs button { height: 30px; padding: 0 10px; border: 0; border-radius: 6px; background: none; cursor: pointer; color: var(--ink-2); font-weight: 550; }
-  #tabs button:hover { background: var(--sunken); color: var(--ink); }
-  #tabs button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 650; }
+  #tabs { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: #eaedf1; }
+  #tabs button { height: 26px; padding: 0 11px; border: 0; border-radius: 6px; background: none; cursor: pointer; color: var(--ink-2); font-weight: 550; transition: background .12s, color .12s; }
+  #tabs button:hover { color: var(--ink); }
+  #tabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); font-weight: 620; box-shadow: 0 1px 2px #17212c1f, 0 1px 1px #17212c0d; }
   .markdown hr { margin: 20px 0; border: 0; border-top: 1px solid var(--line); }
   .markdown .table-wrap { margin: 8px 0 14px; overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
   .markdown table { width: 100%; border-collapse: collapse; font-size: 0.92em; line-height: 1.45; overflow-wrap: break-word; }
@@ -205,38 +206,37 @@ PAGE = r"""<!doctype html>
     background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%235d6a79' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5 14 14'/%3E%3C/svg%3E") 11px center / 15px no-repeat; }
   #initiative-search::placeholder { color: var(--ink-3); }
   #initiative-search:focus-visible { outline-offset: 0; border-color: var(--accent); }
-  .segments { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface); }
-  .segments button { flex: 1 1 auto; height: 28px; padding: 0 5px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); font-size: 12.5px; white-space: nowrap; cursor: pointer; }
-  .segments button:hover { background: var(--sunken); color: var(--ink); }
-  .segments button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 620; }
-  .segments span { margin-left: 3px; font-weight: 400; font-variant-numeric: tabular-nums; }
   #initiative-list { flex: 1; min-height: 0; display: grid; gap: 2px; align-content: start; margin: 0; padding: 8px; list-style: none; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
-  .inav-item { display: grid; gap: 4px; width: 100%; padding: 11px 12px 12px; border: 1px solid transparent; border-radius: 8px; background: none; text-align: left; cursor: pointer; }
+  .inav-row { position: relative; }
+  .inav-item { display: grid; gap: 4px; width: 100%; padding: 11px 12px 12px 34px; border: 1px solid transparent; border-radius: 8px; background: none; text-align: left; cursor: pointer; }
   .inav-item:hover { background: #e8ecf0; }
   .inav-item[aria-current="true"] { border-color: var(--line-2); background: var(--surface); box-shadow: 0 1px 2px #17212c0f, 0 3px 8px #17212c0a; }
+  .inav-title-row { display: flex; align-items: baseline; gap: 7px; }
   .inav-title { font-size: 15px; font-weight: 620; line-height: 1.3; }
   .inav-summary { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--ink-2); font-size: 13.5px; line-height: 1.45; }
   .inav-item mark { border-radius: 2px; background: #ffe9a8; color: inherit; box-shadow: 0 0 0 1px #ffe9a8; }
-  .inav-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 2px; color: var(--ink-3); font-size: 12.5px; }
+  .inav-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; margin-top: 3px; color: var(--ink-3); font-size: 12.5px; }
+  .inav-edited { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .inav-empty { padding: 16px 12px; color: var(--ink-2); }
   .inav-empty button { padding: 0; border: 0; background: none; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   #initiative-detail { --gutter: 48px; min-width: 0; overflow-y: auto; background: var(--surface); scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
   #initiative-detail:focus-visible { outline: none; }
   .idetail-empty { margin: 0; padding: 40px var(--gutter); color: var(--ink-2); font-size: 16px; }
   .idetail-head { padding: 22px var(--gutter) 16px; }
-  .idetail-back { display: none; margin: 0 0 14px; padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; }
+  .idetail-back { display: none; align-items: center; gap: 4px; margin: 0 0 14px -2px; padding: 0; border: 0; background: none; color: var(--accent); font-weight: 550; cursor: pointer; }
   .idetail-title { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px 24px; }
   .idetail-title .ibutton { flex: none; margin-top: 2px; }
   .idetail-head h2 { flex: 1 1 18rem; max-width: 30ch; margin: 0; font-size: 28px; font-weight: 680; line-height: 1.18; letter-spacing: -0.022em; text-wrap: balance; }
   .idetail-summary { max-width: 72ch; margin: 8px 0 0; color: var(--ink-2); font-size: 16.5px; line-height: 1.55; text-wrap: pretty; }
-  .idetail-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin-top: 10px; color: var(--ink-2); font-size: 13.5px; }
+  .idetail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 14px; color: var(--ink-2); font-size: 13.5px; }
   .idetail-meta .status { color: var(--ink); font-weight: 550; }
-  .idetail-path { max-width: 100%; padding: 0; border: 0; background: none; color: var(--ink-2); font: 12.5px var(--mono); text-decoration: underline dotted var(--line-2); text-underline-offset: 3px; overflow-wrap: anywhere; text-align: left; cursor: pointer; }
-  .idetail-path:hover { color: var(--accent); text-decoration-color: currentColor; }
-  .ibutton { display: inline-flex; align-items: center; max-width: 100%; height: 32px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface); color: var(--ink-2); font-size: 13.5px; font-weight: 550; cursor: pointer; }
+  .idetail-path { display: block; max-width: 100%; margin: 0 0 8px; padding: 0; border: 0; background: none; color: var(--ink-3); font: 12.5px var(--mono); overflow-wrap: anywhere; text-align: left; cursor: copy; }
+  .idetail-path:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  .ibutton { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 32px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface); color: var(--ink-2); font-size: 13.5px; font-weight: 550; white-space: nowrap; cursor: pointer; box-shadow: 0 1px 1px #17212c0a; transition: background .12s, border-color .12s, color .12s; }
+  .ibutton:active { transform: translateY(.5px); }
   .ibutton:hover { background: var(--sunken); color: var(--ink); }
-  .ibutton.primary { border-color: var(--accent); background: var(--accent); color: white; }
-  .ibutton.primary:hover { background: #18559f; color: white; }
+  .ibutton.primary { border-color: #1a56a3; background: var(--accent); color: white; box-shadow: inset 0 1px 0 #ffffff24, 0 1px 2px #1f63b840; }
+  .ibutton.primary:hover { border-color: #154a8d; background: #1a58a6; color: white; }
   .ibutton.path { font: 12.5px var(--mono); }
   .ibutton .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .idetail-tabbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 22px; padding: 0 var(--gutter); border-bottom: 1px solid var(--line); background: var(--surface); }
@@ -263,9 +263,9 @@ PAGE = r"""<!doctype html>
   .idetail-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 620; }
   .idetail-tabs button:focus-visible { outline-offset: -2px; }
   .idetail-tabs .tab-note { margin-left: 6px; color: var(--ink-3); font-size: 12.5px; font-weight: 400; }
-  .idetail-tabs .tab-end { margin-left: auto; }
-  .idetail-body { display: grid; grid-template-columns: minmax(0, 46rem) 220px; gap: 56px; padding: 22px var(--gutter) 120px; }
-  .idetail-body.wide { grid-template-columns: minmax(0, 58rem) 200px; }
+  .idetail-tabs .tab-sep { flex: none; align-self: center; width: 1px; height: 16px; background: var(--line-2); }
+  .idetail-body { display: grid; grid-template-columns: minmax(0, 46rem) 240px; gap: 48px; padding: 22px var(--gutter) 120px; }
+  .idetail-body.wide { grid-template-columns: minmax(0, 58rem) 240px; }
   .idetail-article { min-width: 0; }
   .idetail-article.enter { animation: doc-in .28s cubic-bezier(.16, 1, .3, 1); }
   @keyframes doc-in { from { opacity: .55; transform: translateY(5px); } }
@@ -295,10 +295,10 @@ PAGE = r"""<!doctype html>
   .doc.markdown a, .map a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
   .outline { position: sticky; top: 68px; align-self: start; display: grid; gap: 1px; max-height: calc(100vh - 100px); overflow-y: auto; scrollbar-width: none; }
   .outline-title { margin: 0 0 8px 10px; color: var(--ink-3); font-size: 12.5px; font-weight: 620; }
-  .outline button { padding: 4px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); font-size: 13.5px; line-height: 1.35; text-align: left; cursor: pointer; }
-  .outline button.sub { padding-left: 22px; font-size: 13px; }
-  .outline button:hover { background: var(--sunken); color: var(--ink); }
-  .outline button[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 550; }
+  .outline .outline-link { padding: 4px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); font-size: 13.5px; line-height: 1.35; text-align: left; cursor: pointer; }
+  .outline .outline-link.sub { padding-left: 22px; font-size: 13px; }
+  .outline .outline-link:hover { background: var(--sunken); color: var(--ink); }
+  .outline .outline-link[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 550; }
   .map { font-size: 15.5px; line-height: 1.6; }
   .map code { padding: 1px 5px; border-radius: 4px; background: #eef1f4; font: 0.86em/1.5 var(--mono); overflow-wrap: anywhere; }
   .map-section + .map-section { margin-top: 52px; }
@@ -347,11 +347,153 @@ PAGE = r"""<!doctype html>
   .entry-more summary { width: max-content; color: var(--accent); font-size: 13px; cursor: pointer; }
   .entry .pill { font-size: 12.5px; }
   .map-foot { margin: 56px 0 0; color: var(--ink-3); font-size: 13px; overflow-wrap: anywhere; }
+  /* Lifecycle status: one hue per state, used for dots, tags, chips and columns. */
+  [data-life] { --life: #7b8794; }
+  [data-life="planned"] { --life: #5b7fb0; }
+  [data-life="active"] { --life: #c26a06; }
+  [data-life="paused"] { --life: #8a63c7; }
+  [data-life="completed"] { --life: #1f8a52; }
+  [data-life="cancelled"] { --life: #98a2ad; }
+  .life { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); font-weight: 550; white-space: nowrap; }
+  .life::before, .life-dot { content: ""; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--life); border: 1.5px solid var(--life); }
+  .life[data-life="planned"]::before, [data-life="planned"] > .life-dot, .life-dot[data-life="planned"], .life[data-life="paused"]::before, [data-life="paused"] > .life-dot, .life-dot[data-life="paused"] { background: none; }
+  [data-life="paused"] > .life-dot, .life-dot[data-life="paused"], .life[data-life="paused"]::before { border-style: double; border-width: 3px; width: 9px; height: 9px; }
+  .life.inferred { font-weight: 400; font-style: italic; }
+  .life.inferred::before, .inferred > .life-dot, .life-dot.inferred { border-style: dashed; background: none; }
+  .inav-meta .life::before { display: none; }
+  .inav-meta .life { color: color-mix(in srgb, var(--life) 72%, var(--ink)); }
+  .ichip-add .icon { width: 12px; height: 12px; }
+  .life-button.inferred { border-style: dashed; background: var(--surface); font-weight: 450; }
+  .life[data-life="cancelled"] { text-decoration: line-through; text-decoration-color: var(--line-2); }
+  .chipset { display: flex; gap: 3px; margin: 0 -14px; padding: 0 14px; overflow-x: auto; scrollbar-width: none; -webkit-mask: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 22px), transparent); mask: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 22px), transparent); }
+  .chipset::-webkit-scrollbar { display: none; }
+  .chipset button { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink-2); font-size: 12.5px; white-space: nowrap; cursor: pointer; }
+  .chipset button:hover { border-color: var(--line-2); color: var(--ink); }
+  .chipset button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--life) 55%, white); background: color-mix(in srgb, var(--life) 11%, white); color: var(--ink); font-weight: 620; }
+  .chipset button[data-life="open"], .chipset button[data-life="all"] { --life: var(--accent); }
+  .chip-count { color: var(--ink-3); font-size: 11.5px; font-weight: 400; font-variant-numeric: tabular-nums; }
+  .sort-label { display: inline-flex; align-items: center; gap: 6px; justify-self: start; color: var(--ink-3); font-size: 12.5px; }
+  .sort-select { height: 27px; padding: 0 24px 0 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 12.5px; color: var(--ink); cursor: pointer; appearance: none;
+    background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%235d6a79' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E") right 7px center / 11px no-repeat; }
+  .sort-select:hover { border-color: var(--line-2); }
+  .pick-slot { position: relative; display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; }
+  .pick-slot > * { grid-area: 1 / 1; transition: opacity .12s; }
+  .pick-slot .inav-check { width: 15px; height: 15px; margin: 0; cursor: pointer; opacity: 0; }
+  .inav-row > .pick-slot { position: absolute; z-index: 1; top: 14px; left: 11px; }
+  .inav-row:hover .pick-slot .inav-check, .bcard:hover .pick-slot .inav-check, .picking .pick-slot .inav-check, .pick-slot .inav-check:checked, .pick-slot .inav-check:focus-visible { opacity: 1; }
+  .inav-row:hover .pick-slot .life-dot, .bcard:hover .pick-slot .life-dot, .picking .pick-slot .life-dot, .picked .pick-slot .life-dot { opacity: 0; }
+  .inav-row.picked .inav-item { border-color: #a9c4e6; background: var(--accent-soft); }
+  .inav-row.picked .inav-item[aria-current="true"] { background: var(--surface); box-shadow: inset 3px 0 0 var(--accent), 0 1px 2px #17212c0f; }
+  .fresh-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--accent); transform: translateY(-2px); }
+  .dep-badge, .drift-badge, .inferred-tag { padding: 0 7px; border-radius: 999px; font-size: 11.5px; line-height: 19px; white-space: nowrap; }
+  .dep-badge { border: 1px solid var(--line-2); color: var(--ink-2); line-height: 17px; }
+  .dep-badge.quiet { border-color: var(--line); color: var(--ink-3); }
+  .drift-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--warn-soft); color: var(--warn); }
+  .drift-badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .inferred-tag { border: 1px dashed var(--line-2); color: var(--ink-3); line-height: 17px; }
+  .pbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+  .pbar:empty { display: none; }
+  #initiative-bar { padding: 10px 14px; border-top: 1px solid var(--line); background: var(--surface); }
+  #initiative-bar.picking, #board-bar.picking { padding: 8px 10px; border-radius: 0; background: #eef4fc; box-shadow: inset 0 1px 0 #a9c4e6; }
+  #board-bar.picking { border-radius: 8px; box-shadow: inset 0 0 0 1px #a9c4e6; }
+  .pbar-count { margin-right: auto; color: var(--accent); font-size: 13.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .pbar-hint { color: var(--ink-3); font-size: 12px; }
+  #initiative-bar:not(.picking) .pbar-hint { margin-left: auto; }
+  .ibutton.quiet { border-color: transparent; background: none; color: var(--ink-2); }
+  .ibutton.quiet:hover { border-color: var(--line); background: var(--sunken); color: var(--ink); }
+  .ibutton.quiet.on { border-color: #a9c4e6; background: var(--accent-soft); color: var(--accent); }
+  .ibutton.small { height: 28px; padding: 0 10px; font-size: 13px; }
+  .idetail-actions { display: flex; flex-wrap: wrap; gap: 6px; flex: none; margin-top: 2px; }
+  .meta-button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 13.5px; font-weight: 550; cursor: pointer; }
+  .meta-button:hover, .meta-button[aria-expanded="true"] { border-color: var(--line-2); background: var(--sunken); }
+  .icon { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .meta-button .icon { width: 12px; height: 12px; margin: 0 -2px 0 -1px; color: var(--ink-3); }
+  .life-button { border-color: color-mix(in srgb, var(--life) 45%, white); background: color-mix(in srgb, var(--life) 9%, white); }
+  .life-button:hover { background: color-mix(in srgb, var(--life) 16%, white); border-color: color-mix(in srgb, var(--life) 60%, white); }
+  .meta-text { color: var(--ink-2); }
+  .idetail-evidence { max-width: 72ch; margin: 10px 0 0; color: var(--ink-3); font-size: 13.5px; }
+  .idetail-evidence.warn { display: inline-block; padding: 6px 11px; border-radius: 7px; background: var(--warn-soft); color: #6e3c05; }
+  .idetail-evidence.warn strong { color: var(--warn); font-weight: 650; }
+  .inext { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); align-items: start; gap: 4px 12px; max-width: 72rem; margin-top: 12px; }
+  .inext-label, .irel-label { padding-top: 4px; color: var(--ink-3); font-size: 13px; font-weight: 550; white-space: nowrap; }
+  .inext-text { justify-self: start; max-width: 72ch; padding: 3px 8px; margin-left: -8px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--ink); font-size: 15px; line-height: 1.5; text-align: left; cursor: text; }
+  .inext-text:hover { border-color: var(--line); background: var(--sunken); }
+  .inext-text.empty { color: var(--ink-3); font-style: italic; }
+  .inext-form { display: grid; gap: 6px; max-width: 72ch; }
+  .inext-form textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--accent); border-radius: 7px; font: inherit; font-size: 15px; line-height: 1.5; color: var(--ink); resize: vertical; }
+  .inext-form textarea:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 0; }
+  .inext-actions { display: flex; align-items: center; gap: 6px; }
+  .irelations { display: grid; gap: 6px; margin-top: 8px; }
+  .irel-row { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); align-items: start; gap: 12px; }
+  .irel-list { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-height: 28px; }
+  .ichip { display: inline-flex; align-items: stretch; max-width: 100%; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); overflow: hidden; }
+  .ichip-open { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 10px; border: 0; background: none; color: var(--ink); font-size: 13.5px; cursor: pointer; }
+  .ichip-open:hover { background: var(--accent-soft); color: var(--accent); }
+  .ichip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34ch; }
+  .ichip-remove { display: inline-grid; place-items: center; padding: 0 8px 0 6px; border: 0; border-left: 1px solid var(--line); background: none; color: var(--ink-3); cursor: pointer; }
+  .ichip-remove .icon { width: 11px; height: 11px; stroke-width: 2; }
+  .ichip-remove:hover { background: #fdecea; color: var(--danger); }
+  .ichip.missing { border-style: dashed; color: var(--ink-3); }
+  .ichip.missing .ichip-name { padding: 3px 10px; font: 12.5px var(--mono); }
+  .ichip-add { display: inline-flex; align-items: center; gap: 4px; height: 27px; padding: 0 10px 0 8px; border: 1px dashed var(--line-2); border-radius: 999px; background: none; color: var(--ink-2); font-size: 13px; cursor: pointer; }
+  .ichip-add:hover, .ichip-add[aria-expanded="true"] { border-style: solid; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  #ticket-menu button[data-life] .life-dot { margin-right: 2px; }
+  .tree { margin: 0; padding: 0; list-style: none; }
+  .tree .tree { padding-left: 12px; margin-left: 7px; border-left: 1px solid var(--line); }
+  .tree-file { display: flex; align-items: baseline; gap: 6px; width: 100%; padding: 4px 8px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); font-size: 13.5px; line-height: 1.35; text-align: left; cursor: pointer; }
+  .tree-file:hover, .tree-file:focus-visible { background: var(--sunken); color: var(--ink); outline: none; }
+  .tree-file[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #doc-menu .tree-name { white-space: normal; }
+  .tree-role { flex: none; margin-left: auto; color: var(--ink-3); font-size: 11px; font-weight: 400; }
+  .tree-folder > summary { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px; color: var(--ink-3); font: 12.5px/1.35 var(--mono); list-style: none; cursor: pointer; }
+  .tree-folder > summary::-webkit-details-marker { display: none; }
+  .tree-folder > summary::before { content: ""; width: 10px; height: 10px; flex: none; background: currentColor; transition: transform .12s;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 2 6.5 5 3.5 8'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 2 6.5 5 3.5 8'/%3E%3C/svg%3E") center / contain no-repeat; }
+  .tree-folder[open] > summary::before { transform: rotate(90deg); }
+  .tree-folder > summary:hover { background: var(--sunken); color: var(--ink); }
+  .tree-count { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .rail-tree { max-height: 42vh; margin: 0 0 18px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+  #board-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--canvas); }
+  .board-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  #board-search { width: min(320px, 100%); height: 32px; padding: 0 10px 0 32px; border: 1px solid var(--line-2); border-radius: 8px; font: inherit; font-size: 14px; color: var(--ink);
+    background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%235d6a79' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5 14 14'/%3E%3C/svg%3E") 10px center / 14px no-repeat; }
+  #board-search:focus-visible { outline-offset: 0; border-color: var(--accent); }
+  .board-hint { margin-left: auto; color: var(--ink-3); font-size: 12.5px; }
+  #board-columns { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 14px 16px 16px; overflow-x: auto; scrollbar-width: thin; }
+  .bcolumn { flex: 1 0 272px; max-width: 380px; min-height: 0; display: flex; flex-direction: column; border-radius: 10px; background: #eaedf1; transition: background .15s, box-shadow .15s; }
+  .bcolumn.empty { flex: 0 0 190px; }
+  .bcolumn.drop { background: color-mix(in srgb, var(--life) 9%, #eaedf1); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--life) 50%, white); }
+  .bcolumn-head { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 10px 6px 13px; }
+  .bcolumn-head h3 { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 13.5px; font-weight: 650; letter-spacing: -0.005em; }
+  .bcolumn-head .chip-count { font-size: 12.5px; }
+  .bcolumn-action { height: 24px; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--ink-2); font-size: 12px; font-weight: 550; cursor: pointer; }
+  .bcolumn-action:first-of-type { margin-left: auto; }
+  .bcolumn-action:hover { color: var(--accent); border-color: #a9c4e6; background: var(--accent-soft); }
+  .bcolumn-cards { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 7px; padding: 2px 8px 10px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+  .bcolumn-empty { margin: 2px 0; padding: 22px 8px; border: 1px dashed var(--line-2); border-radius: 8px; color: var(--ink-3); font-size: 12.5px; text-align: center; }
+  .bcard { display: grid; gap: 6px; padding: 11px 12px 10px; border: 1px solid #dfe3e8; border-radius: 8px; background: var(--surface); box-shadow: 0 1px 2px #17212c0d; cursor: grab; transition: box-shadow .15s, border-color .15s; }
+  .bcard:hover { border-color: var(--line-2); box-shadow: 0 3px 10px #17212c14, 0 1px 2px #17212c0d; }
+  .bcard:active { cursor: grabbing; }
+  .bcard:focus-visible { outline-offset: 1px; }
+  .bcard.picked { border-color: #8fb3e3; box-shadow: 0 0 0 1px #8fb3e3, 0 1px 2px #17212c0d; background: #f6f9fe; }
+  .bcard.inferred { border-style: dashed; }
+  .bcard.dragging { opacity: .4; }
+  .bcard-top { display: flex; align-items: flex-start; gap: 8px; }
+  .bcard .pick-slot { margin-top: 1px; }
+  .bcard-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 620; line-height: 1.32; }
+  .bcard .fresh-dot { margin-top: 6px; }
+  .bcard-next { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.45; }
+  .bcard-next.muted { color: var(--ink-3); }
+  .bcard .inav-meta { margin-top: 1px; font-size: 12px; }
+  body.board-view { height: 100vh; }
   @media (max-width: 1320px) {
     .idetail-body, .idetail-body.wide { grid-template-columns: minmax(0, 46rem); }
     .idetail-body.wide { grid-template-columns: minmax(0, 58rem); }
     .outline { display: none; }
   }
+  @media (min-width: 1321px) { #initiative-detail.has-rail-tree .doc-more { display: none; } }
   @media (max-width: 1100px) { #initiative-detail { --gutter: 32px; } }
   @media (min-width: 801px) {
     body.initiatives-view { display: grid; grid-template-columns: clamp(320px, 26vw, 400px) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
@@ -378,7 +520,7 @@ PAGE = r"""<!doctype html>
     #initiatives-panel:not(.detail-open) .inav-item[aria-current="true"] { border-color: transparent; background: none; box-shadow: none; }
     #initiative-list { overflow: visible; }
     #initiative-detail { --gutter: 18px; overflow: visible; }
-    .idetail-back { display: block; }
+    .idetail-back { display: inline-flex; }
     .idetail-head { padding-top: 20px; }
     .idetail-head h2 { font-size: 23px; }
     .idetail-tabs { gap: 18px; }
@@ -388,13 +530,24 @@ PAGE = r"""<!doctype html>
     .map-rows dd { margin-bottom: 8px; }
     .entries { grid-template-columns: minmax(0, 1fr); }
     .entry-main { grid-column: 1 / -1; }
+    .inext, .irel-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    .inext-label, .irel-label { padding-top: 0; }
+    .inext-text { margin-left: -8px; }
+    .board-tools { padding: 10px 12px; }
+    #board-search { width: 100%; }
+    .board-hint, .pbar-hint { display: none; }
+    #board-columns { scroll-snap-type: x mandatory; scroll-padding: 0 12px; padding: 12px; }
+    .bcolumn, .bcolumn.empty { flex: 0 0 86%; max-width: none; scroll-snap-align: start; }
+    body.board-view { height: 100vh; }
   }
+  @media (hover: none) { .pbar-hint, .board-hint { display: none; } .pick-slot .inav-check { opacity: 1; } .pick-slot .life-dot { opacity: 0; } }
 </style>
 </head>
 <body>
 <header><div class="brand"><h1 id="project">Ticket view</h1><span class="app-name" hidden>Ticket view</span></div><nav id="tabs" role="tablist" aria-label="Project views">
   <button id="tickets-tab" type="button" role="tab" aria-selected="true" aria-controls="tickets-panel">Tickets</button>
   <button id="initiatives-tab" type="button" role="tab" aria-selected="false" aria-controls="initiatives-panel" tabindex="-1">Initiatives</button>
+  <button id="board-tab" type="button" role="tab" aria-selected="false" aria-controls="board-panel" tabindex="-1" title="Initiatives by status">Board</button>
 </nav><span id="count"></span><div id="assignee-legend" aria-label="Assignees"></div><span id="error" role="status"></span><div id="filters">
   <label><input id="show-closed" type="checkbox"> Show closed tickets</label>
   <label id="closed-epic-label" hidden><input id="show-closed-epics" type="checkbox"> Show closed epics</label>
@@ -427,16 +580,26 @@ PAGE = r"""<!doctype html>
   <nav id="initiative-nav" aria-label="Initiatives">
     <div class="inav-tools">
       <input id="initiative-search" type="search" placeholder="Search initiatives" aria-label="Search initiatives" autocomplete="off" spellcheck="false">
-      <div id="initiative-show" class="segments" role="group" aria-label="Filter by work status">
-        <button type="button" data-show="unstarted" title="No recorded start">No start<span></span></button>
-        <button type="button" data-show="started">Started<span></span></button>
-        <button type="button" data-show="complete">Complete<span></span></button>
-        <button type="button" data-show="all">All<span></span></button>
-      </div>
+      <div id="initiative-show" class="chipset" role="group" aria-label="Filter by status"></div>
+      <label class="sort-label">Sort <select id="initiative-sort" class="sort-select" aria-label="Sort initiatives">
+        <option value="recent">Recently edited</option><option value="title">Title</option><option value="status">Status</option><option value="phase">Phase</option>
+      </select></label>
     </div>
     <ul id="initiative-list"></ul>
+    <div id="initiative-bar" class="pbar" aria-live="polite"></div>
   </nav>
   <div id="initiative-detail" tabindex="-1"></div>
+</section>
+<section id="board-panel" role="tabpanel" aria-labelledby="board-tab" hidden>
+  <div class="board-tools">
+    <input id="board-search" type="search" placeholder="Search initiatives" aria-label="Search initiatives" autocomplete="off" spellcheck="false">
+    <label class="sort-label">Sort <select id="board-sort" class="sort-select" aria-label="Sort cards">
+      <option value="recent">Recently edited</option><option value="title">Title</option><option value="status">Status</option><option value="phase">Phase</option>
+    </select></label>
+    <div id="board-bar" class="pbar" aria-live="polite"></div>
+    <span class="board-hint">Drag cards between columns to change status</span>
+  </div>
+  <div id="board-columns"></div>
 </section>
 <div id="toast" role="status" hidden><span id="toast-message"></span><button id="toast-undo" type="button">Undo</button></div>
 <div id="ticket-menu" role="menu" aria-label="Ticket actions" hidden></div>
@@ -634,14 +797,17 @@ function dismissToast() {
   document.querySelector('#toast').hidden = true;
   document.querySelector('#toast-undo').onclick = null;
 }
-function showUndoToast(from, to) {
+// Shows `message` for five seconds, with an Undo button when `undo` is given.
+function showToast(message, undo) {
   dismissToast();
-  document.querySelector('#toast-message').textContent = `Connection created: ${from} → ${to}`;
+  document.querySelector('#toast-message').textContent = message;
   document.querySelector('#toast').hidden = false;
-  document.querySelector('#toast-undo').onclick = async () => {
-    if (await changeDependency(from, to, 'remove')) dismissToast();
-  };
+  document.querySelector('#toast-undo').hidden = !undo;
+  if (undo) document.querySelector('#toast-undo').onclick = async () => { if (await undo()) dismissToast(); };
   toastTimer = setTimeout(dismissToast, 5000);
+}
+function showUndoToast(from, to) {
+  showToast(`Connection created: ${from} → ${to}`, () => changeDependency(from, to, 'remove'));
 }
 async function selectNode(id) {
   if (connectFrom !== null) {
@@ -658,7 +824,14 @@ async function selectNode(id) {
 document.addEventListener('pointerdown', event => { if (!ticketMenu.contains(event.target)) closeTicketMenu(); });
 document.addEventListener('keydown', event => {
   if (ticketMenu.hidden) return;
-  if (event.key === 'Escape') { closeTicketMenu(); document.getElementById(nodeId(selected))?.focus(); event.preventDefault(); return; }
+  if (event.key === 'Escape') {
+    closeTicketMenu();
+    (menuReturn?.isConnected ? menuReturn : document.getElementById(nodeId(selected)))?.focus();
+    menuReturn = null;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
   if (event.target.closest('input')) return;
   if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
   const options = [...ticketMenu.querySelectorAll('button:not(:disabled)')];
@@ -1759,25 +1932,28 @@ document.querySelector('#show-closed-epics').addEventListener('change', event =>
   showClosedEpics = event.target.checked;
   render();
 });
-// The tab, initiative, document and list filters live in the URL fragment, so
-// a refresh or a shared link returns to the same place. `choice` is the
-// initiative's folder, or null until one is picked. `doc` is a project path,
-// 'map', or '' for the initiative's first document.
+// The tab, initiative, document, list filter and sort live in the URL
+// fragment, so a refresh or a shared link returns to the same place. `choice`
+// is the initiative's folder, or null until one is picked. `doc` is a project
+// path, 'map', or '' for the initiative's first document.
+const SHOW_KEYS = ['open', 'planned', 'active', 'paused', 'completed', 'cancelled', 'all'];
+const SORT_KEYS = ['recent', 'title', 'status', 'phase'];
 function parseViewState(hash) {
   const params = new URLSearchParams(hash.replace(/^#/, ''));
   const folder = params.get('i'), doc = params.get('d') || '';
   const base = !folder || folder === '.' ? '' : folder + '/';
   return {
-    tab: params.get('view') === 'initiatives' ? 'initiatives' : 'tickets',
+    tab: ['initiatives', 'board'].includes(params.get('view')) ? params.get('view') : 'tickets',
     choice: folder === null ? null : folder === '.' ? '' : folder,
     doc: folder === null || !doc ? '' : doc === 'map' ? 'map' : doc.startsWith('/') ? doc.slice(1) : base + doc,
-    show: ['unstarted', 'started', 'complete', 'all'].includes(params.get('show')) ? params.get('show') : '',
+    show: SHOW_KEYS.includes(params.get('show')) ? params.get('show') : '',
+    sort: SORT_KEYS.includes(params.get('sort')) ? params.get('sort') : '',
     query: params.get('q') || '',
   };
 }
 function formatViewState(state) {
   const pairs = [];
-  if (state.tab === 'initiatives') pairs.push(['view', 'initiatives']);
+  if (state.tab !== 'tickets') pairs.push(['view', state.tab]);
   if (state.choice !== null) {
     const base = state.choice ? state.choice + '/' : '';
     pairs.push(['i', state.choice || '.']);
@@ -1785,6 +1961,7 @@ function formatViewState(state) {
     else if (state.doc) pairs.push(['d', !base ? state.doc : state.doc.startsWith(base) ? state.doc.slice(base.length) : '/' + state.doc]);
   }
   if (state.show) pairs.push(['show', state.show]);
+  if (state.sort) pairs.push(['sort', state.sort]);
   if (state.query) pairs.push(['q', state.query]);
   return pairs.length ? '#' + pairs.map(([key, value]) => key + '=' + encodeURIComponent(value).replace(/%2F/g, '/')).join('&') : '';
 }
@@ -1815,27 +1992,82 @@ const initiativesPanel = document.querySelector('#initiatives-panel');
 const initiativeList = document.querySelector('#initiative-list');
 const initiativeDetail = document.querySelector('#initiative-detail');
 const initiativeSearch = document.querySelector('#initiative-search');
-let initiativeChoice = null, initiativeDoc = '', initiativeShow = '', initiativeQuery = '';
-let initiativeListSignature = '', initiativeDetailSignature = '', detailKey = '', pendingAnchor = '', loaded = false;
-let savedScroll = null;
+const boardSearch = document.querySelector('#board-search');
+let initiativeChoice = null, initiativeDoc = '', initiativeShow = '', initiativeSort = '', initiativeQuery = '';
+let initiativeListSignature = '', initiativeDetailSignature = '', boardSignature = '', detailKey = '', pendingAnchor = '', loaded = false;
+let savedScroll = null, editingNext = false;
 try { savedScroll = JSON.parse(sessionStorage.getItem('tk-view-scroll')); } catch {}
 const docCache = new Map(), docPending = new Set();
-const workStates = { 'No recorded start': 'unstarted', Started: 'started', Complete: 'complete' };
+// Initiatives picked for one combined prompt, by map path.
+const picked = new Set();
 function make(tag, className = '', text = '') {
   const element = document.createElement(tag);
   if (className) element.className = className;
   if (text !== '') element.textContent = text;
   return element;
 }
-const viewState = () => ({ tab: activeTab, choice: initiativeChoice, doc: initiativeDoc, show: initiativeShow, query: initiativeQuery });
+const viewState = () => ({ tab: activeTab, choice: initiativeChoice, doc: initiativeDoc, show: initiativeShow, sort: initiativeSort, query: initiativeQuery });
 function writeViewState(push) {
   const hash = formatViewState(viewState());
   if (hash === location.hash) return;
   history[push ? 'pushState' : 'replaceState'](null, '', hash || location.pathname + location.search);
 }
 const initiativeFolder = item => item.path.replace(/\/?initiative-map\.json$/, '');
-const effectiveShow = () => initiativeShow || (initiatives.some(item => item.status === 'No recorded start') ? 'unstarted' : 'all');
+const projectPath = relative => [project, relative].filter(Boolean).join('/');
+// `initiative.status` in the map is the recorded lifecycle. Maps without one
+// get a status inferred from linked work, marked so it reads as a guess.
+const LIFECYCLE = [['planned', 'Planned'], ['active', 'Active'], ['paused', 'Paused'], ['completed', 'Completed'], ['cancelled', 'Cancelled']];
+const LIFE_LABEL = Object.fromEntries(LIFECYCLE);
+const PHASES = ['intent', 'brainstorm', 'shape', 'plan', 'execution', 'reconciliation'];
+const FINISHED = new Set(['completed', 'cancelled']);
+function lifecycle(item) {
+  const recorded = item.map.initiative.status;
+  if (LIFE_LABEL[recorded]) return { key: recorded, inferred: false };
+  return { key: item.status === 'Complete' ? 'completed' : item.status === 'Started' ? 'active' : 'planned', inferred: true };
+}
+// Says when linked tickets disagree with the recorded status.
+function drift(item) {
+  const { key, inferred } = lifecycle(item);
+  if (inferred) return '';
+  const evidence = item.evidence.replace(/\.$/, '');
+  if (item.status === 'Started' && key === 'planned') return `Work has started (${evidence}), but the status is planned.`;
+  if (item.status === 'Complete' && !FINISHED.has(key)) return `Work looks complete (${evidence}), but the status is ${key}.`;
+  if (item.status === 'Started' && key === 'completed') return `The status is completed, but work is still open (${evidence}).`;
+  return '';
+}
+const dependsOn = item => Array.isArray(item.map.initiative.depends_on) ? item.map.initiative.depends_on.filter(slug => typeof slug === 'string') : [];
+const bySlug = () => new Map(initiatives.map(item => [item.slug, item]));
+const neededBy = item => initiatives.filter(other => dependsOn(other).includes(item.slug));
+const waitingOn = item => { const map = bySlug(); return dependsOn(item).map(slug => map.get(slug)).filter(other => other && !FINISHED.has(lifecycle(other).key)); };
+function relatedTo(item) {
+  const found = new Set(), map = bySlug();
+  const collect = value => {
+    if (!Array.isArray(value)) return;
+    for (const entry of value) {
+      const slug = typeof entry === 'string' ? entry : entry && typeof entry.slug === 'string' ? entry.slug : '';
+      if (map.has(slug) && slug !== item.slug && !dependsOn(item).includes(slug)) found.add(slug);
+    }
+  };
+  collect(item.map.related_initiatives);
+  for (const value of Object.values(item.map)) if (value && typeof value === 'object' && !Array.isArray(value)) collect(value.related_initiatives);
+  return [...found].map(slug => map.get(slug));
+}
+// Would `item` depending on `other` close a loop?
+function dependencyCycle(item, other) {
+  const map = bySlug(), pending = [other.slug], seen = new Set();
+  while (pending.length) {
+    const slug = pending.pop();
+    if (slug === item.slug) return true;
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    if (map.has(slug)) pending.push(...dependsOn(map.get(slug)));
+  }
+  return false;
+}
+const effectiveShow = () => initiativeShow || 'open';
+const effectiveSort = () => initiativeSort || 'recent';
 const searchTerms = () => initiativeQuery.toLowerCase().split(/\s+/).filter(Boolean);
+const showMatches = (item, show) => show === 'all' || (show === 'open' ? !FINISHED.has(lifecycle(item).key) : lifecycle(item).key === show);
 function highlighted(className, text) {
   const element = make('span', className);
   let end = 0;
@@ -1846,28 +2078,82 @@ function highlighted(className, text) {
   element.append(text.slice(end));
   return element;
 }
+function sortInitiatives(items) {
+  const sort = effectiveSort(), order = LIFECYCLE.map(([key]) => key);
+  const title = item => item.map.initiative.title.toLowerCase();
+  const by = {
+    recent: (a, b) => b.modified - a.modified,
+    title: (a, b) => title(a).localeCompare(title(b)),
+    status: (a, b) => order.indexOf(lifecycle(a).key) - order.indexOf(lifecycle(b).key) || b.modified - a.modified,
+    phase: (a, b) => PHASES.indexOf(b.map.initiative.current_phase) - PHASES.indexOf(a.map.initiative.current_phase) || b.modified - a.modified,
+  }[sort];
+  return [...items].sort((a, b) => by(a, b) || title(a).localeCompare(title(b)));
+}
 function matchingInitiatives() {
   const terms = searchTerms();
-  if (!terms.length) return initiatives;
-  return initiatives.filter(item => {
+  return sortInitiatives(terms.length ? initiatives.filter(item => {
     const info = item.map.initiative;
-    const text = [info.title, info.summary, item.path, ...(item.map.intent?.themes || []).filter(theme => typeof theme === 'string')].join(' ').toLowerCase();
+    const text = [info.title, info.summary, info.next_action, item.path, ...(item.map.intent?.themes || []).filter(theme => typeof theme === 'string')].join(' ').toLowerCase();
     return terms.every(term => text.includes(term));
-  });
+  }) : initiatives);
 }
 function visibleInitiatives() {
   const show = effectiveShow();
-  return matchingInitiatives().filter(item => show === 'all' || workStates[item.status] === show);
+  return matchingInitiatives().filter(item => showMatches(item, show));
 }
 function selectedInitiative() {
   return initiatives.find(item => initiativeFolder(item) === initiativeChoice) || visibleInitiatives()[0] || null;
 }
 const currentDoc = item => initiativeDoc || item.documents[0]?.path || 'map';
-function workStatus(item) {
-  const state = workStates[item.status];
-  const element = make('span', 'status', item.status);
-  element.dataset.status = state === 'started' ? 'in_progress' : state === 'complete' ? 'closed' : 'open';
+function lifeTag(item, className = 'life') {
+  const { key, inferred } = lifecycle(item);
+  const element = make('span', className, LIFE_LABEL[key]);
+  element.dataset.life = key;
+  if (inferred) {
+    element.classList.add('inferred');
+    element.title = 'Not recorded in the map. Inferred from linked work: ' + item.status + '.';
+  }
   return element;
+}
+function ago(ms) {
+  const minutes = Math.round((Date.now() - ms) / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return minutes + 'm ago';
+  if (minutes < 60 * 24) return Math.round(minutes / 60) + 'h ago';
+  if (minutes < 60 * 24 * 7) return Math.round(minutes / 1440) + 'd ago';
+  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: new Date(ms).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+}
+const fresh = item => Date.now() - item.modified < 864e5;
+const ICONS = { chevron: 'M4 6l4 4 4-4', x: 'M4.5 4.5l7 7M11.5 4.5l-7 7', back: 'M9.5 3.5 5 8l4.5 4.5', check: 'M3.5 8.5l3 3 6-7', plus: 'M8 3.5v9M3.5 8h9' };
+function icon(name) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('class', 'icon');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', ICONS[name]);
+  svg.append(path);
+  return svg;
+}
+// The status dot, which turns into a selection checkbox on hover or while
+// anything is selected.
+function pickSlot(item) {
+  const slot = make('span', 'pick-slot');
+  const dot = make('span', 'life-dot' + (lifecycle(item).inferred ? ' inferred' : ''));
+  dot.dataset.life = lifecycle(item).key;
+  const check = make('input', 'inav-check');
+  check.type = 'checkbox';
+  check.checked = picked.has(item.path);
+  check.tabIndex = -1;
+  check.setAttribute('aria-label', 'Select ' + item.map.initiative.title);
+  check.addEventListener('click', event => { event.stopPropagation(); togglePicked(item); });
+  slot.append(dot, check);
+  return slot;
+}
+function goToInitiative(item) {
+  if (!showMatches(item, effectiveShow())) initiativeShow = 'all';
+  if (activeTab !== 'initiatives') switchTab('initiatives', false);
+  pickInitiative(item.path);
 }
 // Keep the kind of document open when moving between initiatives: a reader
 // comparing shape briefs stays on the shape brief.
@@ -1879,6 +2165,7 @@ function pickInitiative(path) {
   const role = previous?.documents.find(entry => entry.path === doc)?.role;
   initiativeDoc = doc === 'map' ? 'map' : (role && item.documents.find(entry => entry.role === role)?.path) || '';
   initiativeChoice = initiativeFolder(item);
+  editingNext = false;
   writeViewState(true);
   renderInitiatives();
 }
@@ -1908,47 +2195,190 @@ function scrollToHeading(fragment) {
   const heading = document.getElementById('doc-' + fragment.replace(/^doc-/, '').toLowerCase());
   if (heading && initiativeDetail.contains(heading)) heading.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
 }
+// Prompts end with a rule, so comments go straight below it.
 function initiativePrompt(item, doc) {
   const lines = [
     `Use /software-design-sleuth-full to review and update the initiative "${item.map.initiative.title}".`,
     '',
-    'Initiative folder: ' + [project, initiativeFolder(item)].filter(Boolean).join('/'),
-    'Initiative map: ' + project + '/' + item.path,
+    'Initiative folder: ' + projectPath(initiativeFolder(item)),
+    'Initiative map: ' + projectPath(item.path),
   ];
-  if (doc !== 'map') lines.push('Document I am reading: ' + project + '/' + doc);
-  lines.push('', 'Read the map and its documents first. Then apply my comments below, and keep the map and the documents consistent with each other.', '', 'Comments:', '- ');
+  if (doc !== 'map') lines.push('Document I am reading: ' + projectPath(doc));
+  lines.push('', 'Read the map and its documents first. Then apply my comments below, and keep the map and the documents consistent with each other.', '', '---', '');
   return lines.join('\n');
 }
+function initiativeEntry(item) {
+  const info = item.map.initiative, { key, inferred } = lifecycle(item);
+  const lines = [`- ${info.title} (${LIFE_LABEL[key].toLowerCase()}${inferred ? ', inferred' : ''}${info.current_phase ? ', ' + info.current_phase + ' phase' : ''})`,
+    '  Folder: ' + projectPath(initiativeFolder(item)), '  Map: ' + projectPath(item.path)];
+  if (info.next_action) lines.push('  Next action: ' + info.next_action);
+  const deps = dependsOn(item);
+  if (deps.length) lines.push('  Depends on: ' + deps.join(', '));
+  return lines.join('\n');
+}
+function groupPrompt(items, label = '') {
+  const count = items.length === 1 ? 'this initiative' : `these ${items.length} ${label ? label + ' ' : ''}initiatives`;
+  return [`Use /software-design-sleuth-full to review and update ${count}.`, '', ...items.map(initiativeEntry), '',
+    'Read each map and its documents first. Then apply my comments below, and keep every map consistent with its documents. When a comment names only some initiatives, change only those.',
+    '', '---', ''].join('\n');
+}
+function retirePrompt(items) {
+  const count = items.length === 1 ? 'this initiative' : `these ${items.length} initiatives`;
+  return [`Use /software-design-sleuth-full to retire ${count}. I approve retiring each one listed and removing its planning files.`, '', ...items.map(initiativeEntry), '',
+    'For each initiative: confirm with evidence that it is completed or cancelled, reconcile the code with the accepted intent, update the durable repository docs, record the closure, and remove only that initiative\'s planning files. If you cannot confirm an initiative is finished, leave it in place and tell me why.',
+    '', '---', ''].join('\n');
+}
+async function saveInitiative(item, changes) {
+  closeTicketMenu();
+  closeDocMenu(false);
+  const day = new Date();
+  const today = day.getFullYear() + '-' + String(day.getMonth() + 1).padStart(2, '0') + '-' + String(day.getDate()).padStart(2, '0');
+  try {
+    const response = await fetch('/api/initiative', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: item.path, version: item.version, changes, today }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Initiative update failed');
+    document.querySelector('#error').textContent = '';
+    etag = '';
+    await refresh();
+    return true;
+  } catch (error) {
+    document.querySelector('#error').textContent = error.message;
+    return false;
+  }
+}
+// Changes the status and offers to put it back.
+async function setLifecycle(item, status) {
+  const before = item.map.initiative.status;
+  if (status === before || !await saveInitiative(item, { status })) return;
+  const title = item.map.initiative.title;
+  showToast(`${title} → ${LIFE_LABEL[status]}`, LIFE_LABEL[before] && (async () => {
+    const current = initiatives.find(entry => entry.path === item.path);
+    return current && saveInitiative(current, { status: before });
+  }));
+}
+// Points a small menu of choices at `trigger`; reuses the ticket menu.
+let menuReturn = null;
+function openChoiceMenu(trigger, heading, options, onPick) {
+  closeDocMenu(false);
+  ticketMenu.setAttribute('role', 'menu');
+  ticketMenu.setAttribute('aria-label', heading);
+  ticketMenu.replaceChildren(menuHeading(heading));
+  for (const option of options) {
+    const button = make('button', '', option.label);
+    button.type = 'button';
+    button.setAttribute('role', 'menuitemradio');
+    button.setAttribute('aria-checked', String(!!option.checked));
+    button.disabled = !!option.checked;
+    if (option.life) { button.prepend(make('span', 'life-dot')); button.dataset.life = option.life; }
+    button.addEventListener('click', () => onPick(option.key));
+    ticketMenu.append(button);
+  }
+  menuReturn = trigger;
+  ticketMenu.hidden = false;
+  const rect = trigger.getBoundingClientRect();
+  ticketMenu.style.left = Math.max(8, Math.min(rect.left, innerWidth - ticketMenu.offsetWidth - 8)) + 'px';
+  ticketMenu.style.top = Math.max(8, rect.bottom + ticketMenu.offsetHeight + 8 > innerHeight ? rect.top - ticketMenu.offsetHeight - 4 : rect.bottom + 4) + 'px';
+  ticketMenu.querySelector('button:not(:disabled)')?.focus();
+}
+function lifecycleMenu(item, trigger) {
+  const { key, inferred } = lifecycle(item);
+  openChoiceMenu(trigger, 'Set status', LIFECYCLE.map(([value, label]) => ({ key: value, label, life: value, checked: value === key && !inferred })), value => setLifecycle(item, value));
+}
+function phaseMenu(item, trigger) {
+  const current = item.map.initiative.current_phase;
+  openChoiceMenu(trigger, 'Set phase', PHASES.map(value => ({ key: value, label: humanize(value), checked: value === current })), value => saveInitiative(item, { current_phase: value }));
+}
+function togglePicked(item) {
+  if (picked.has(item.path)) picked.delete(item.path); else picked.add(item.path);
+  renderInitiatives();
+  if (activeTab === 'board') renderBoard();
+}
+const pickedItems = () => sortInitiatives(initiatives.filter(item => picked.has(item.path)));
+// The bar under the list and above the board: one prompt for what is picked,
+// or for everything shown when nothing is.
+function renderPromptBar(host, shown, label) {
+  for (const path of [...picked]) if (!initiatives.some(item => item.path === path)) picked.delete(path);
+  const items = pickedItems();
+  const button = (text, title, action, className = 'ibutton') => {
+    const element = make('button', className);
+    element.type = 'button';
+    element.title = title;
+    element.append(make('span', 'label', text));
+    element.addEventListener('click', () => action(element));
+    return element;
+  };
+  host.replaceChildren();
+  host.classList.toggle('picking', items.length > 0);
+  if (items.length) {
+    host.append(make('span', 'pbar-count', items.length + ' selected'),
+      button('Copy prompt', 'Copy one prompt that references every selected initiative', element => copyText(groupPrompt(items), element), 'ibutton primary'));
+    if (items.every(item => FINISHED.has(lifecycle(item).key))) host.append(button('Copy retire prompt', 'Copy a prompt that retires every selected initiative', element => copyText(retirePrompt(items), element)));
+    host.append(button('Clear', 'Clear the selection (Esc)', () => { picked.clear(); renderInitiatives(); if (activeTab === 'board') renderBoard(); }, 'ibutton quiet'));
+  } else if (shown.length) {
+    host.append(button(`Copy prompt for ${shown.length} ${label}`, 'Copy one prompt that references every initiative listed here', element => copyText(groupPrompt(shown, label === 'shown' ? '' : label), element), 'ibutton quiet'));
+    if (shown.every(item => FINISHED.has(lifecycle(item).key))) host.append(button('Retire all', 'Copy a prompt that retires every initiative listed here', element => copyText(retirePrompt(shown), element), 'ibutton quiet'));
+    host.append(make('span', 'pbar-hint', '⌘-click to select'));
+  }
+}
+const SHOW_LABELS = { open: 'Open', planned: 'Planned', active: 'Active', paused: 'Paused', completed: 'Completed', cancelled: 'Cancelled', all: 'All' };
 function renderInitiativeList() {
   const show = effectiveShow(), matching = matchingInitiatives(), visible = visibleInitiatives(), current = selectedInitiative();
-  for (const button of document.querySelectorAll('#initiative-show button')) {
-    const key = button.dataset.show;
-    button.setAttribute('aria-pressed', String(key === show));
-    button.querySelector('span').textContent = matching.filter(item => key === 'all' || workStates[item.status] === key).length;
+  const chips = document.querySelector('#initiative-show');
+  chips.replaceChildren();
+  for (const key of SHOW_KEYS) {
+    const count = matching.filter(item => showMatches(item, key)).length;
+    if (!count && !['open', 'all'].includes(key) && key !== show) continue;
+    const chip = make('button', '', SHOW_LABELS[key]);
+    chip.type = 'button';
+    chip.dataset.life = key;
+    chip.setAttribute('aria-pressed', String(key === show));
+    chip.append(make('span', 'chip-count', String(count)));
+    chip.addEventListener('click', () => { initiativeShow = key === 'open' ? '' : key; writeViewState(false); renderInitiatives(); });
+    chips.append(chip);
   }
-  const signature = JSON.stringify([show, initiativeQuery, current?.path, initiatives.length, visible.map(item => [item.path, item.status, item.map.initiative])]);
+  const pressed = chips.querySelector('[aria-pressed="true"]');
+  if (pressed) chips.scrollLeft = Math.max(0, pressed.offsetLeft + pressed.offsetWidth - chips.clientWidth + 22);
+  document.querySelector('#initiative-sort').value = effectiveSort();
+  renderPromptBar(document.querySelector('#initiative-bar'), visible, show === 'all' ? 'shown' : SHOW_LABELS[show].toLowerCase());
+  const signature = JSON.stringify([show, effectiveSort(), initiativeQuery, current?.path, [...picked], Math.floor(Date.now() / 60000), initiatives.length, visible.map(item => [item.path, item.status, item.modified, item.map.initiative])]);
   if (signature === initiativeListSignature) return;
   const first = !initiativeListSignature;
   initiativeListSignature = signature;
   const focused = initiativeList.contains(document.activeElement);
   const top = initiativeList.scrollTop;
   initiativeList.replaceChildren();
+  initiativeList.classList.toggle('picking', picked.size > 0);
   for (const item of visible) {
     const info = item.map.initiative;
+    const row = make('li', 'inav-row');
+    if (picked.has(item.path)) row.classList.add('picked');
     const button = make('button', 'inav-item');
     button.type = 'button';
     button.dataset.path = item.path;
     if (item === current) button.setAttribute('aria-current', 'true');
-    button.append(highlighted('inav-title', info.title));
+    const title = make('span', 'inav-title-row');
+    title.append(highlighted('inav-title', info.title));
+    if (fresh(item)) { const dot = make('span', 'fresh-dot'); dot.title = 'Edited in the last day'; title.append(dot); }
+    button.append(title);
     if (info.summary) button.append(highlighted('inav-summary', info.summary));
     const meta = make('span', 'inav-meta');
-    meta.append(workStatus(item));
-    if (info.current_phase) meta.append(make('span', '', humanize(info.current_phase) + ' phase'));
-    if (info.last_updated) meta.append(make('span', '', shortDate(info.last_updated)));
+    meta.append(lifeTag(item));
+    if (info.current_phase) meta.append(make('span', '', humanize(info.current_phase)));
+    const waits = waitingOn(item).length;
+    if (waits) { const wait = make('span', 'dep-badge', 'Waits on ' + waits); wait.title = 'Depends on unfinished initiatives'; meta.append(wait); }
+    if (drift(item)) { const warn = make('span', 'drift-badge', 'Check status'); warn.title = drift(item); meta.append(warn); }
+    const edited = make('span', 'inav-edited', ago(item.modified));
+    edited.title = 'Last file change ' + new Date(item.modified).toLocaleString();
+    meta.append(edited);
     button.append(meta);
-    button.addEventListener('click', () => pickInitiative(item.path));
-    const row = make('li');
-    row.append(button);
+    button.addEventListener('click', event => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey) { event.preventDefault(); togglePicked(item); return; }
+      pickInitiative(item.path);
+    });
+    row.append(pickSlot(item), button);
     initiativeList.append(row);
   }
   if (!visible.length) {
@@ -1959,7 +2389,7 @@ function renderInitiativeList() {
       reset.type = 'button';
       reset.addEventListener('click', () => {
         initiativeShow = 'all';
-        initiativeQuery = initiativeSearch.value = '';
+        initiativeQuery = initiativeSearch.value = boardSearch.value = '';
         writeViewState(false);
         renderInitiatives();
       });
@@ -2194,14 +2624,13 @@ function renderMap(host, item, linked) {
   host.append(make('p', 'map-foot', item.path + (typeof data.schema_version === 'string' ? ' · schema ' + data.schema_version : '')));
 }
 function updateOutline() {
-  const links = [...initiativeDetail.querySelectorAll('.outline button')];
+  const links = [...initiativeDetail.querySelectorAll('.outline .outline-link')];
   if (!links.length) return;
   const limit = initiativeDetail.getBoundingClientRect().top + 96;
   let active = links[0];
   for (const link of links) if (document.getElementById(link.dataset.target)?.getBoundingClientRect().top <= limit) active = link;
   for (const link of links) link.setAttribute('aria-current', String(link === active));
 }
-const DOC_TAB_LIMIT = 6;
 const LIFECYCLE_ROLES = new Set(['intent_brief', 'brainstorm', 'shape_brief', 'implementation_plan']);
 const docMenu = document.querySelector('#doc-menu');
 let docMenuTrigger = null;
@@ -2216,53 +2645,36 @@ function closeDocMenu(refocus) {
 function placeDocMenu() {
   if (docMenu.hidden || !docMenuTrigger) return;
   const rect = docMenuTrigger.getBoundingClientRect();
-  const width = Math.min(540, innerWidth - 24);
+  const width = Math.min(Number(docMenu.dataset.width) || 480, innerWidth - 24);
   docMenu.style.width = width + 'px';
-  docMenu.style.left = Math.max(12, Math.min(rect.right - width, innerWidth - width - 12)) + 'px';
+  docMenu.style.left = Math.max(12, Math.min(docMenu.dataset.align === 'left' ? rect.left : rect.right - width, innerWidth - width - 12)) + 'px';
   docMenu.style.top = rect.bottom + 6 + 'px';
   docMenu.style.maxHeight = Math.max(200, innerHeight - rect.bottom - 18) + 'px';
 }
-// Lists every document in the initiative, grouped by folder, with a filter
-// that matches titles and file paths.
-function openDocMenu(item, doc, trigger) {
+// A filterable popover under `trigger`. `draw(list, terms)` fills the list;
+// Enter picks the first button in it.
+function openPicker(trigger, { placeholder, label, width = 480, align = 'right', draw }) {
   closeDocMenu(false);
+  closeTicketMenu();
   docMenuTrigger = trigger;
   trigger.setAttribute('aria-expanded', 'true');
+  docMenu.setAttribute('aria-label', label);
+  docMenu.dataset.width = width;
+  docMenu.dataset.align = align;
   const filter = make('input', 'doc-menu-filter');
   filter.type = 'search';
-  filter.placeholder = 'Filter ' + item.documents.length + ' documents';
-  filter.setAttribute('aria-label', 'Filter documents');
+  filter.placeholder = placeholder;
+  filter.setAttribute('aria-label', placeholder);
   filter.autocomplete = 'off';
   filter.spellcheck = false;
   const list = make('div', 'doc-menu-list');
-  const pick = entry => { closeDocMenu(false); openDoc(entry.path); };
-  const draw = () => {
-    const terms = filter.value.toLowerCase().split(/\s+/).filter(Boolean);
-    const groups = new Map();
-    for (const entry of item.documents) {
-      if (!terms.every(term => (entry.title + ' ' + entry.name).toLowerCase().includes(term))) continue;
-      const folder = entry.name.split('/').slice(0, -1).join('/');
-      if (!groups.has(folder)) groups.set(folder, []);
-      groups.get(folder).push(entry);
-    }
+  const redraw = () => {
     list.replaceChildren();
-    for (const [folder, group] of groups) {
-      if (groups.size > 1 || folder) list.append(make('div', 'doc-menu-group', folder ? folder + '/' : 'Initiative folder'));
-      for (const entry of group) {
-        const button = make('button', 'doc-menu-item');
-        button.type = 'button';
-        button.title = entry.path;
-        if (entry.path === doc) button.setAttribute('aria-current', 'true');
-        button.append(make('span', 'doc-menu-title', entry.title || entry.label), make('span', 'doc-menu-file', entry.name.split('/').pop()));
-        button.addEventListener('click', () => pick(entry));
-        list.append(button);
-      }
-    }
-    if (!list.children.length) list.append(make('p', 'doc-menu-empty', 'No document matches this filter.'));
+    draw(list, filter.value.toLowerCase().split(/\s+/).filter(Boolean));
   };
-  filter.addEventListener('input', draw);
+  filter.addEventListener('input', redraw);
   docMenu.onkeydown = event => {
-    const items = [...list.querySelectorAll('.doc-menu-item')];
+    const items = [...list.querySelectorAll('button')];
     const index = items.indexOf(document.activeElement);
     if (event.key === 'Escape') closeDocMenu(true);
     else if (event.key === 'Enter' && event.target === filter && items.length) items[0].click();
@@ -2270,8 +2682,9 @@ function openDocMenu(item, doc, trigger) {
     else if (event.key === 'ArrowUp') (index > 0 ? items[index - 1] : filter).focus();
     else return;
     event.preventDefault();
+    event.stopPropagation();
   };
-  draw();
+  redraw();
   docMenu.replaceChildren(filter, list);
   docMenu.hidden = false;
   placeDocMenu();
@@ -2282,8 +2695,149 @@ addEventListener('resize', placeDocMenu);
 document.addEventListener('pointerdown', event => {
   if (!docMenu.hidden && !docMenu.contains(event.target) && !docMenuTrigger?.contains(event.target)) closeDocMenu(false);
 });
+const docName = entry => entry.title || entry.name.split('/').pop().replace(/\.md$/i, '').replace(/[-_]+/g, ' ');
+// Folders the reader opened or closed in the file tree, by initiative.
+const treeState = new Map();
+// Draws an initiative's documents as a folder tree. With search terms, only
+// matching files show and every folder is open.
+function fileTree(item, doc, terms = [], onPick = path => openDoc(path)) {
+  const root = { folders: new Map(), files: [] };
+  for (const entry of item.documents) {
+    if (terms.length && !terms.every(term => (entry.title + ' ' + entry.name).toLowerCase().includes(term))) continue;
+    let node = root;
+    const parts = entry.name.split('/');
+    for (const part of parts.slice(0, -1)) {
+      if (!node.folders.has(part)) node.folders.set(part, { folders: new Map(), files: [] });
+      node = node.folders.get(part);
+    }
+    node.files.push(entry);
+  }
+  const state = treeState.get(item.path) || treeState.set(item.path, new Map()).get(item.path);
+  const contains = (node, path) => node.files.some(entry => entry.path === path) || [...node.folders.values()].some(child => contains(child, path));
+  const count = node => node.files.length + [...node.folders.values()].reduce((sum, child) => sum + count(child), 0);
+  const build = (node, prefix) => {
+    const list = make('ul', 'tree');
+    for (const entry of node.files) {
+      const row = make('li');
+      const button = make('button', 'tree-file');
+      button.type = 'button';
+      button.title = entry.name;
+      if (entry.path === doc) button.setAttribute('aria-current', 'true');
+      const brief = LIFECYCLE_ROLES.has(entry.role);
+      button.append(make('span', 'tree-name', brief ? (entry.role === 'implementation_plan' ? 'Implementation plan' : entry.role === 'brainstorm' ? 'Brainstorm' : entry.label + ' brief') : docName(entry)));
+      if (brief) button.append(make('span', 'tree-role', entry.name.split('/').pop()));
+      button.addEventListener('click', () => onPick(entry.path));
+      row.append(button);
+      list.append(row);
+    }
+    for (const [name, child] of [...node.folders].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const path = prefix + name + '/';
+      const row = make('li');
+      const details = make('details', 'tree-folder');
+      details.open = terms.length > 0 || (state.has(path) ? state.get(path) : contains(child, doc) || item.documents.length <= 12);
+      details.addEventListener('toggle', () => { if (!terms.length) state.set(path, details.open); });
+      const summary = make('summary', '', name);
+      summary.append(make('span', 'tree-count', String(count(child))));
+      details.append(summary, build(child, path));
+      row.append(details);
+      list.append(row);
+    }
+    return list;
+  };
+  return build(root, '');
+}
+// Lists other initiatives to add as dependencies, leaving out ones that would
+// close a loop.
+function dependencyPicker(item, trigger) {
+  openPicker(trigger, {
+    placeholder: 'Find an initiative', label: 'Add a dependency', width: 420, align: 'left',
+    draw(list, terms) {
+      const current = dependsOn(item);
+      for (const other of sortInitiatives(initiatives)) {
+        if (other === item || current.includes(other.slug)) continue;
+        const info = other.map.initiative;
+        if (!terms.every(term => (info.title + ' ' + other.slug).toLowerCase().includes(term))) continue;
+        const cycle = dependencyCycle(item, other);
+        const button = make('button', 'doc-menu-item');
+        button.type = 'button';
+        button.disabled = cycle;
+        if (cycle) button.title = info.title + ' already depends on this initiative';
+        const top = make('span', 'doc-menu-title');
+        top.append(lifeTag(other), ' ', info.title);
+        button.append(top, make('span', 'doc-menu-file', cycle ? 'Would create a cycle' : other.slug));
+        button.addEventListener('click', () => saveInitiative(item, { depends_on: [...current, other.slug] }));
+        list.append(button);
+      }
+      if (!list.children.length) list.append(make('p', 'doc-menu-empty', 'No other initiative matches.'));
+    },
+  });
+}
+function initiativeChip(other, onRemove) {
+  const chip = make('span', 'ichip');
+  const open = make('button', 'ichip-open');
+  open.type = 'button';
+  open.title = 'Open ' + other.map.initiative.title;
+  open.append(make('span', 'life-dot'), make('span', 'ichip-name', other.map.initiative.title));
+  open.dataset.life = lifecycle(other).key;
+  open.addEventListener('click', () => goToInitiative(other));
+  chip.append(open);
+  if (onRemove) {
+    const remove = make('button', 'ichip-remove');
+    remove.append(icon('x'));
+    remove.type = 'button';
+    remove.setAttribute('aria-label', 'Remove dependency on ' + other.map.initiative.title);
+    remove.title = 'Remove this dependency';
+    remove.addEventListener('click', onRemove);
+    chip.append(remove);
+  }
+  return chip;
+}
+function nextActionBlock(item) {
+  const info = item.map.initiative;
+  const block = make('div', 'inext');
+  block.append(make('span', 'inext-label', 'Next'));
+  if (!editingNext) {
+    const text = make('button', 'inext-text' + (info.next_action ? '' : ' empty'), info.next_action || 'Add a next action');
+    text.type = 'button';
+    text.title = 'Edit the next action';
+    text.addEventListener('click', () => { editingNext = true; initiativeDetailSignature = ''; renderInitiativeDetail(); initiativeDetail.querySelector('.inext textarea')?.focus(); });
+    block.append(text);
+    return block;
+  }
+  const form = make('form', 'inext-form');
+  const input = make('textarea');
+  input.value = info.next_action || '';
+  input.rows = 2;
+  input.maxLength = 1000;
+  input.setAttribute('aria-label', 'Next action');
+  const stop = () => { editingNext = false; initiativeDetailSignature = ''; renderInitiativeDetail(); };
+  const save = make('button', 'ibutton primary small', 'Save');
+  save.type = 'submit';
+  const cancel = make('button', 'ibutton quiet small', 'Cancel');
+  cancel.type = 'button';
+  cancel.addEventListener('click', stop);
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (input.value.trim() === (info.next_action || '')) { stop(); return; }
+    editingNext = false;
+    if (!await saveInitiative(item, { next_action: input.value })) editingNext = true;
+    initiativeDetailSignature = '';
+    renderInitiativeDetail();
+  });
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); }
+    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); stop(); }
+  });
+  const actions = make('div', 'inext-actions');
+  actions.append(save, cancel, make('span', 'pbar-hint', 'Enter to save · Esc to cancel'));
+  form.append(input, actions);
+  block.append(form);
+  return block;
+}
 function renderInitiativeDetail() {
   initiativesPanel.classList.toggle('detail-open', initiativeChoice !== null);
+  // Do not redraw over the next action while it is being typed.
+  if (editingNext && initiativeDetail.contains(document.activeElement) && document.activeElement.closest('.inext-form')) return;
   const item = selectedInitiative();
   if (!item) {
     if (initiativeDetailSignature === 'empty:' + initiatives.length) return;
@@ -2298,7 +2852,9 @@ function renderInitiativeDetail() {
   const cached = doc === 'map' ? null : docCache.get(doc);
   const map = byId();
   const linked = item.tickets.map(id => map.get(id)).filter(Boolean);
-  const signature = JSON.stringify([item, doc, project, cached && [cached.version, cached.error || ''], linked.map(ticket => [ticket.id, ticket.status, ticket.title])]);
+  const deps = dependsOn(item), slugs = bySlug();
+  const signature = JSON.stringify([item, doc, project, editingNext, Math.floor(Date.now() / 60000), cached && [cached.version, cached.error || ''], linked.map(ticket => [ticket.id, ticket.status, ticket.title]),
+    [...deps, ...neededBy(item).map(other => other.slug), ...relatedTo(item).map(other => other.slug)].map(slug => slugs.get(slug) ? [slug, slugs.get(slug).map.initiative.title, lifecycle(slugs.get(slug)).key] : slug)]);
   if (signature === initiativeDetailSignature) return;
   initiativeDetailSignature = signature;
   const key = item.path + '|' + doc;
@@ -2308,50 +2864,131 @@ function renderInitiativeDetail() {
   const refocus = initiativeDetail.contains(document.activeElement) && document.activeElement.getAttribute('role') === 'tab';
   detailKey = key;
   const info = item.map.initiative;
-  const folder = [project, initiativeFolder(item)].filter(Boolean).join('/');
+  const folder = projectPath(initiativeFolder(item));
+  const life = lifecycle(item);
 
   const head = make('div', 'idetail-head');
-  const back = make('button', 'idetail-back', 'All initiatives');
+  const back = make('button', 'idetail-back');
+  back.append(icon('back'), 'All initiatives');
   back.type = 'button';
   back.addEventListener('click', () => { initiativeChoice = null; initiativeDoc = ''; writeViewState(true); renderInitiatives(); });
-  const meta = make('div', 'idetail-meta');
-  meta.append(workStatus(item), make('span', '', item.evidence));
-  for (const text of [info.current_phase && humanize(info.current_phase) + ' phase', info.scale && humanize(info.scale) + ' scale', info.last_updated && 'Updated ' + shortDate(info.last_updated)]) {
-    if (text) meta.append(make('span', '', text));
-  }
-  const prompt = make('button', 'ibutton primary');
-  prompt.type = 'button';
-  prompt.title = 'Copy a prompt that points an agent at this initiative, ready for your comments';
-  prompt.append(make('span', 'label', 'Copy prompt to update'));
-  prompt.addEventListener('click', () => copyText(initiativePrompt(item, doc), prompt));
   const where = make('button', 'idetail-path');
   where.type = 'button';
   where.title = 'Copy ' + folder;
   where.append(make('span', 'label', (initiativeFolder(item) || '.') + '/'));
   where.addEventListener('click', () => copyText(folder, where));
-  meta.append(where);
+
+  const actions = make('div', 'idetail-actions');
+  const prompt = make('button', 'ibutton primary');
+  prompt.type = 'button';
+  prompt.title = 'Copy a prompt that points an agent at this initiative and the open document';
+  prompt.append(make('span', 'label', 'Copy prompt to update'));
+  prompt.addEventListener('click', () => copyText(initiativePrompt(item, doc), prompt));
+  actions.append(prompt);
+  if (FINISHED.has(life.key)) {
+    const retire = make('button', 'ibutton');
+    retire.type = 'button';
+    retire.title = 'Copy a prompt that retires this initiative and removes its planning files';
+    retire.append(make('span', 'label', 'Copy retire prompt'));
+    retire.addEventListener('click', () => copyText(retirePrompt([item]), retire));
+    actions.append(retire);
+  }
+  const select = make('button', 'ibutton quiet' + (picked.has(item.path) ? ' on' : ''));
+  select.type = 'button';
+  select.setAttribute('aria-pressed', String(picked.has(item.path)));
+  select.title = 'Add to the selection for a combined prompt';
+  if (picked.has(item.path)) select.append(icon('check'));
+  select.append(make('span', 'label', picked.has(item.path) ? 'Selected' : 'Select'));
+  select.addEventListener('click', () => togglePicked(item));
+  actions.append(select);
+
   const title = make('div', 'idetail-title');
-  title.append(make('h2', '', info.title), prompt);
-  head.append(back, title);
+  title.append(make('h2', '', info.title), actions);
+  head.append(back, where, title);
   if (info.summary) head.append(make('p', 'idetail-summary', info.summary));
+
+  const meta = make('div', 'idetail-meta');
+  const status = make('button', 'meta-button life-button');
+  status.type = 'button';
+  status.dataset.life = life.key;
+  status.setAttribute('aria-haspopup', 'menu');
+  status.title = life.inferred ? 'Inferred from linked work; not recorded in the map. Click to record a status.' : 'Change the status';
+  if (life.inferred) status.classList.add('inferred');
+  status.append(make('span', 'life-dot'), LIFE_LABEL[life.key] + (life.inferred ? ' (inferred)' : ''), icon('chevron'));
+  status.addEventListener('click', () => lifecycleMenu(item, status));
+  const phase = make('button', 'meta-button');
+  phase.type = 'button';
+  phase.setAttribute('aria-haspopup', 'menu');
+  phase.title = 'Change the phase';
+  phase.append(info.current_phase ? humanize(info.current_phase) + ' phase' : 'Set phase', icon('chevron'));
+  phase.addEventListener('click', () => phaseMenu(item, phase));
+  meta.append(status, phase);
+  if (info.scale) meta.append(make('span', 'meta-text', humanize(info.scale) + ' scale'));
+  const edited = make('span', 'meta-text', 'Edited ' + ago(item.modified));
+  edited.title = 'Newest change to the map or its documents: ' + new Date(item.modified).toLocaleString() + (info.last_updated ? '\nMap last_updated: ' + info.last_updated : '');
+  meta.append(edited);
   head.append(meta);
+
+  const evidence = make('p', 'idetail-evidence');
+  const warning = drift(item);
+  if (warning) { evidence.classList.add('warn'); evidence.append(make('strong', '', 'Check status: '), warning + ' '); }
+  if (!warning) evidence.append(make('span', '', 'Work evidence: ' + item.evidence));
+  head.append(evidence);
+  head.append(nextActionBlock(item));
+
+  const relations = make('div', 'irelations');
+  const relationRow = (label, nodes, extra) => {
+    const row = make('div', 'irel-row');
+    row.append(make('span', 'irel-label', label));
+    const list = make('div', 'irel-list');
+    list.append(...nodes);
+    if (extra) list.append(extra);
+    row.append(list);
+    relations.append(row);
+  };
+  const add = make('button', 'ichip-add');
+  add.append(icon('plus'), 'Add');
+  add.type = 'button';
+  add.title = 'Add an initiative this one depends on';
+  add.setAttribute('aria-haspopup', 'dialog');
+  add.addEventListener('click', () => docMenu.hidden || docMenuTrigger !== add ? dependencyPicker(item, add) : closeDocMenu(true));
+  relationRow('Depends on', deps.map(slug => {
+    const other = slugs.get(slug);
+    const remove = () => saveInitiative(item, { depends_on: deps.filter(entry => entry !== slug) });
+    if (other) return initiativeChip(other, remove);
+    const missing = make('span', 'ichip missing');
+    missing.append(make('span', 'ichip-name', slug));
+    missing.title = 'No initiative with this slug';
+    const button = make('button', 'ichip-remove');
+    button.append(icon('x'));
+    button.type = 'button';
+    button.setAttribute('aria-label', 'Remove ' + slug);
+    button.addEventListener('click', remove);
+    missing.append(button);
+    return missing;
+  }), add);
+  const needed = neededBy(item);
+  if (needed.length) relationRow('Needed by', needed.map(other => initiativeChip(other)));
+  const related = relatedTo(item);
+  if (related.length) relationRow('Related', related.map(other => initiativeChip(other)));
+  head.append(relations);
 
   closeDocMenu(false);
   const tabBar = make('div', 'idetail-tabbar');
   const tabList = make('div', 'idetail-tabs');
   tabList.setAttribute('role', 'tablist');
   tabList.setAttribute('aria-label', 'Initiative documents');
-  // With many documents, only the lifecycle briefs and the files at the top
-  // of the initiative folder get tabs; the menu reaches the rest.
-  const crowded = item.documents.length > DOC_TAB_LIMIT + 1;
-  const inline = crowded ? item.documents.filter(entry => LIFECYCLE_ROLES.has(entry.role) || !entry.name.includes('/')).slice(0, DOC_TAB_LIMIT) : item.documents;
+  // The lifecycle briefs and the map get tabs. Other files live in the file
+  // tree; one opened from there gets a tab while it is open.
+  let inline = item.documents.filter(entry => LIFECYCLE_ROLES.has(entry.role));
+  if (!inline.length) inline = item.documents.filter(entry => !entry.name.includes('/')).slice(0, 3);
   const entries = inline.map(entry => ({ key: entry.path, label: entry.label, note: entry.status && entry.status !== 'current' ? humanize(entry.status) : '', title: entry.path }));
   if (doc !== 'map' && !inline.includes(listed)) entries.push(listed
-    ? { key: doc, label: listed.title || listed.label, note: '', title: listed.path, extra: true }
+    ? { key: doc, label: docName(listed), note: '', title: listed.path, extra: true }
     : { key: doc, label: doc.split('/').pop(), note: 'Linked', title: doc, extra: true });
   entries.push({ key: 'map', label: 'Map', note: '', title: 'The initiative map, laid out for reading' });
   for (const entry of entries) {
-    const tab = make('button', entry.key === 'map' ? 'tab-end' : entry.extra ? 'tab-extra' : '', entry.label);
+    const tab = make('button', entry.extra ? 'tab-extra' : '', entry.label);
     tab.type = 'button';
     tab.title = entry.title;
     tab.setAttribute('role', 'tab');
@@ -2366,18 +3003,27 @@ function renderInitiativeDetail() {
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? entries.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : entries.length - 1)) % entries.length;
       openDoc(entries[next].key);
     });
+    if (entry.key === 'map' && entries.length > 1) { const sep = make('span', 'tab-sep'); sep.setAttribute('aria-hidden', 'true'); tabList.append(sep); }
     tabList.append(tab);
   }
   tabBar.append(tabList);
-  if (crowded) {
+  const others = item.documents.length > inline.length;
+  if (others) {
     const more = make('button', 'doc-more');
     more.type = 'button';
-    more.title = 'Browse and filter every document in this initiative';
+    more.title = 'Browse every document in this initiative';
     more.setAttribute('aria-haspopup', 'dialog');
     more.setAttribute('aria-expanded', 'false');
-    more.append('All documents', make('span', 'count', String(item.documents.length)));
+    more.append('Files', make('span', 'count', String(item.documents.length)));
     more.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5"/></svg>');
-    more.addEventListener('click', () => docMenu.hidden ? openDocMenu(item, doc, more) : closeDocMenu(true));
+    more.addEventListener('click', () => docMenu.hidden ? openPicker(more, {
+      placeholder: 'Filter ' + item.documents.length + ' documents', label: 'Initiative documents',
+      draw(list, terms) {
+        const tree = fileTree(item, doc, terms, path => { closeDocMenu(false); openDoc(path); });
+        if (tree.children.length) list.append(tree);
+        else list.append(make('p', 'doc-menu-empty', 'No document matches this filter.'));
+      },
+    }) : closeDocMenu(true));
     tabBar.append(more);
   }
 
@@ -2393,12 +3039,13 @@ function renderInitiativeDetail() {
     const file = make('div', 'doc-file');
     const path = make('button', 'ibutton path');
     path.type = 'button';
-    path.title = 'Copy ' + project + '/' + doc;
+    path.title = 'Copy ' + projectPath(doc);
     path.append(make('span', 'label', listed ? listed.name : doc));
-    path.addEventListener('click', () => copyText(project + '/' + doc, path));
+    path.addEventListener('click', () => copyText(projectPath(doc), path));
     file.append(path);
     if (listed?.status) file.append(make('span', '', humanize(listed.status)));
     if (listed?.updated) file.append(make('span', '', 'Updated ' + shortDate(listed.updated)));
+    if (listed?.version) file.append(make('span', '', 'Edited ' + ago(Number(listed.version) / 1e6)));
     const content = make('div', 'doc markdown');
     if (!cached) article.setAttribute('aria-busy', 'true');
     else if (cached.error) content.append(make('p', 'doc-error', 'Could not read ' + doc + '. ' + cached.error));
@@ -2410,24 +3057,35 @@ function renderInitiativeDetail() {
     article.append(file, content);
   }
   body.append(article);
+  // The side rail holds the file tree and the outline on wide windows.
+  const rail = make('nav', 'outline');
+  rail.setAttribute('aria-label', 'Files and outline');
+  if (others) {
+    body.classList.add('has-tree');
+    rail.append(make('div', 'outline-title', 'Files'));
+    const tree = make('div', 'rail-tree');
+    tree.append(fileTree(item, doc));
+    rail.append(tree);
+  }
   const targets = [...article.querySelectorAll(headings)].filter(heading => heading.id);
   if (targets.length >= 3) {
-    const outline = make('nav', 'outline');
-    outline.setAttribute('aria-label', 'On this page');
-    outline.append(make('div', 'outline-title', 'On this page'));
+    rail.append(make('div', 'outline-title', 'On this page'));
     for (const heading of targets) {
-      const link = make('button', heading.tagName === 'H4' ? 'sub' : '', heading.textContent);
+      const link = make('button', 'outline-link' + (heading.tagName === 'H4' ? ' sub' : ''), heading.textContent);
       link.type = 'button';
       link.dataset.target = heading.id;
       link.addEventListener('click', () => scrollToHeading(heading.id));
-      outline.append(link);
+      rail.append(link);
     }
-    body.append(outline);
   }
+  if (rail.children.length) body.append(rail);
+  initiativeDetail.classList.toggle('has-rail-tree', others);
   initiativeDetail.replaceChildren(head, tabBar, body);
   initiativeDetail.scrollTop = top;
   if (refocus) tabList.querySelector('[aria-selected="true"]')?.focus();
   tabList.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  const railTree = rail.querySelector('.rail-tree'), railFile = railTree?.querySelector('.tree-file[aria-current="true"]');
+  if (railFile && railFile.offsetTop + railFile.offsetHeight > railTree.clientHeight) railTree.scrollTop = railFile.offsetTop - railTree.clientHeight / 3;
   if (ready && savedScroll) {
     if (savedScroll.key === key) initiativeDetail.scrollTop = savedScroll.top;
     savedScroll = null;
@@ -2450,21 +3108,29 @@ initiativeDetail.addEventListener('scroll', () => {
   });
 }, { passive: true });
 addEventListener('resize', updateOutline);
-initiativeSearch.addEventListener('input', () => {
-  initiativeQuery = initiativeSearch.value.trim();
-  writeViewState(false);
-  renderInitiatives();
-});
-for (const button of document.querySelectorAll('#initiative-show button')) {
-  button.addEventListener('click', () => {
-    initiativeShow = button.dataset.show;
+for (const input of [initiativeSearch, boardSearch]) {
+  input.addEventListener('input', () => {
+    initiativeQuery = input.value.trim();
+    (input === initiativeSearch ? boardSearch : initiativeSearch).value = input.value;
     writeViewState(false);
-    renderInitiatives();
+    if (activeTab === 'board') renderBoard(); else renderInitiatives();
+  });
+}
+for (const select of document.querySelectorAll('.sort-select')) {
+  select.addEventListener('change', () => {
+    initiativeSort = select.value === 'recent' ? '' : select.value;
+    writeViewState(false);
+    if (activeTab === 'board') renderBoard(); else renderInitiatives();
   });
 }
 initiativeList.addEventListener('keydown', event => {
-  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
   const items = [...initiativeList.querySelectorAll('.inav-item')];
+  if (event.key === 'x' && items.includes(document.activeElement)) {
+    const item = initiatives.find(entry => entry.path === document.activeElement.dataset.path);
+    if (item) { event.preventDefault(); togglePicked(item); }
+    return;
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
   if (!items.length) return;
   event.preventDefault();
   const index = items.indexOf(document.activeElement);
@@ -2473,22 +3139,140 @@ initiativeList.addEventListener('keydown', event => {
   pickInitiative(items[next].dataset.path);
 });
 document.addEventListener('keydown', event => {
-  if (activeTab !== 'initiatives' || event.altKey || event.ctrlKey || event.metaKey) return;
-  if (event.key === 'Escape' && event.target === initiativeSearch && initiativeSearch.value) {
-    initiativeSearch.value = '';
-    initiativeSearch.dispatchEvent(new Event('input'));
+  if (activeTab === 'tickets' || event.altKey || event.ctrlKey || event.metaKey) return;
+  const search = activeTab === 'board' ? boardSearch : initiativeSearch;
+  if (event.key === 'Escape' && event.target === search && search.value) {
+    search.value = '';
+    search.dispatchEvent(new Event('input'));
+    event.preventDefault();
+  } else if (event.key === 'Escape' && picked.size && ticketMenu.hidden && docMenu.hidden && !event.target.closest('input, textarea')) {
+    picked.clear();
+    renderInitiatives();
+    if (activeTab === 'board') renderBoard();
     event.preventDefault();
   } else if (event.key === '/' && !event.target.closest('input, textarea, [contenteditable]')) {
-    initiativeSearch.focus();
-    initiativeSearch.select();
+    search.focus();
+    search.select();
     event.preventDefault();
   }
 });
+// The board lays initiatives out by recorded status. Drag a card to another
+// column to change its status; each column copies one prompt for its cards.
+const boardColumns = document.querySelector('#board-columns');
+let draggedPath = null;
+function boardCard(item) {
+  const info = item.map.initiative, life = lifecycle(item);
+  const card = make('div', 'bcard');
+  card.tabIndex = 0;
+  card.draggable = true;
+  card.dataset.path = item.path;
+  card.setAttribute('role', 'button');
+  card.setAttribute('aria-label', info.title + ', ' + LIFE_LABEL[life.key] + '. Enter opens, X selects, Shift+F10 changes status.');
+  if (picked.has(item.path)) card.classList.add('picked');
+  if (life.inferred) card.classList.add('inferred');
+  const top = make('div', 'bcard-top');
+  top.append(pickSlot(item), make('span', 'bcard-title', info.title));
+  if (fresh(item)) { const dot = make('span', 'fresh-dot'); dot.title = 'Edited in the last day'; top.append(dot); }
+  card.append(top);
+  if (info.next_action) card.append(make('p', 'bcard-next', info.next_action));
+  else if (info.summary) card.append(make('p', 'bcard-next muted', info.summary));
+  const meta = make('div', 'inav-meta');
+  if (info.current_phase) meta.append(make('span', '', humanize(info.current_phase)));
+  if (life.inferred) { const tag = make('span', 'inferred-tag', 'Inferred'); tag.title = 'Not recorded in the map. Inferred from linked work: ' + item.status + '.'; meta.append(tag); }
+  const waits = waitingOn(item);
+  if (waits.length) { const wait = make('span', 'dep-badge', 'Waits on ' + waits.length); wait.title = 'Waiting on: ' + waits.map(other => other.map.initiative.title).join(', '); meta.append(wait); }
+  const needed = neededBy(item).length;
+  if (needed) { const tag = make('span', 'dep-badge quiet', 'Blocks ' + needed); tag.title = 'Needed by: ' + neededBy(item).map(other => other.map.initiative.title).join(', '); meta.append(tag); }
+  if (drift(item)) { const warn = make('span', 'drift-badge', 'Check status'); warn.title = drift(item); meta.append(warn); }
+  const edited = make('span', 'inav-edited', ago(item.modified));
+  edited.title = 'Last file change ' + new Date(item.modified).toLocaleString();
+  meta.append(edited);
+  card.append(meta);
+  card.addEventListener('click', event => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey) { togglePicked(item); return; }
+    goToInitiative(item);
+  });
+  card.addEventListener('contextmenu', event => { event.preventDefault(); lifecycleMenu(item, card); });
+  card.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToInitiative(item); }
+    else if (event.key === 'x') { event.preventDefault(); togglePicked(item); }
+    else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); lifecycleMenu(item, card); }
+  });
+  card.addEventListener('dragstart', event => {
+    draggedPath = item.path;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', item.map.initiative.title);
+    requestAnimationFrame(() => card.classList.add('dragging'));
+  });
+  card.addEventListener('dragend', () => { draggedPath = null; card.classList.remove('dragging'); boardColumns.querySelectorAll('.drop').forEach(column => column.classList.remove('drop')); });
+  return card;
+}
+function renderBoard() {
+  if (!loaded) return;
+  document.querySelector('#board-sort').value = effectiveSort();
+  const matching = matchingInitiatives();
+  renderPromptBar(document.querySelector('#board-bar'), matching, initiativeQuery ? 'matching' : 'shown');
+  const signature = JSON.stringify([effectiveSort(), initiativeQuery, [...picked], Math.floor(Date.now() / 60000), matching.map(item => [item.path, item.status, item.modified, item.map.initiative])]);
+  if (signature === boardSignature) return;
+  boardSignature = signature;
+  boardColumns.classList.toggle('picking', picked.size > 0);
+  const focusedPath = document.activeElement?.closest?.('.bcard')?.dataset.path;
+  const scrolls = new Map([...boardColumns.querySelectorAll('.bcolumn')].map(column => [column.dataset.life, column.querySelector('.bcolumn-cards').scrollTop]));
+  boardColumns.replaceChildren();
+  for (const [key, label] of LIFECYCLE) {
+    const items = matching.filter(item => lifecycle(item).key === key);
+    const column = make('section', 'bcolumn' + (items.length ? '' : ' empty'));
+    column.dataset.life = key;
+    column.setAttribute('aria-label', label + ' initiatives');
+    const head = make('header', 'bcolumn-head');
+    const name = make('h3', '', label);
+    name.prepend(make('span', 'life-dot'));
+    head.append(name, make('span', 'chip-count', String(items.length)));
+    if (items.length) {
+      const copy = make('button', 'bcolumn-action');
+      copy.type = 'button';
+      copy.title = `Copy one prompt for the ${items.length} ${label.toLowerCase()} initiatives`;
+      copy.append(make('span', 'label', 'Prompt'));
+      copy.addEventListener('click', () => copyText(groupPrompt(items, label.toLowerCase()), copy));
+      head.append(copy);
+      if (FINISHED.has(key)) {
+        const retire = make('button', 'bcolumn-action');
+        retire.type = 'button';
+        retire.title = `Copy a prompt that retires the ${items.length} ${label.toLowerCase()} initiatives`;
+        retire.append(make('span', 'label', 'Retire'));
+        retire.addEventListener('click', () => copyText(retirePrompt(items), retire));
+        head.append(retire);
+      }
+    }
+    const cards = make('div', 'bcolumn-cards');
+    for (const item of items) cards.append(boardCard(item));
+    if (!items.length) cards.append(make('p', 'bcolumn-empty', 'Drop a card here'));
+    column.append(head, cards);
+    column.addEventListener('dragover', event => {
+      const item = initiatives.find(entry => entry.path === draggedPath);
+      if (!item || (lifecycle(item).key === key && !lifecycle(item).inferred)) return;
+      event.preventDefault();
+      column.classList.add('drop');
+    });
+    column.addEventListener('dragleave', event => { if (!column.contains(event.relatedTarget)) column.classList.remove('drop'); });
+    column.addEventListener('drop', event => {
+      event.preventDefault();
+      column.classList.remove('drop');
+      const item = initiatives.find(entry => entry.path === draggedPath);
+      if (item) setLifecycle(item, key);
+    });
+    boardColumns.append(column);
+    cards.scrollTop = scrolls.get(key) || 0;
+  }
+  if (!initiatives.length) boardColumns.replaceChildren(make('p', 'idetail-empty', 'This project has no initiative-map.json files.'));
+  if (focusedPath) boardColumns.querySelector(`.bcard[data-path="${CSS.escape(focusedPath)}"]`)?.focus();
+}
 function switchTab(name, record = true) {
   activeTab = name;
   document.body.classList.toggle('initiatives-view', name === 'initiatives');
+  document.body.classList.toggle('board-view', name === 'board');
   if (record) writeViewState(true);
-  document.querySelector('.app-name').textContent = name === 'tickets' ? 'Ticket view' : 'Initiatives';
+  document.querySelector('.app-name').textContent = { tickets: 'Ticket view', initiatives: 'Initiatives', board: 'Initiative board' }[name];
   document.title = document.querySelector('#project').textContent + ' · ' + document.querySelector('.app-name').textContent;
   closeTicketMenu();
   closeDocMenu(false);
@@ -2501,6 +3285,7 @@ function switchTab(name, record = true) {
   }
   for (const id of ['count', 'filters', 'assignee-legend']) document.getElementById(id).hidden = name !== 'tickets';
   if (name === 'tickets') { render(); relayoutForViewport(); }
+  else if (name === 'board') renderBoard();
   else renderInitiatives();
 }
 const tabs = [...document.querySelectorAll('#tabs button')];
@@ -2509,7 +3294,8 @@ for (const tab of tabs) {
   tab.addEventListener('keydown', event => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
-    const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs.at(-1) : tabs[1 - tabs.indexOf(tab)];
+    const shown = tabs.filter(entry => !entry.hidden), index = shown.indexOf(tab);
+    const next = event.key === 'Home' ? shown[0] : event.key === 'End' ? shown.at(-1) : shown[(index + (event.key === 'ArrowRight' ? 1 : shown.length - 1)) % shown.length];
     next.focus();
     switchTab(next.id.replace('-tab', ''));
   });
@@ -2519,7 +3305,8 @@ function applyViewState() {
   initiativeChoice = state.choice;
   initiativeDoc = state.doc;
   initiativeShow = state.show;
-  initiativeQuery = initiativeSearch.value = state.query;
+  initiativeSort = state.sort;
+  initiativeQuery = initiativeSearch.value = boardSearch.value = state.query;
   switchTab(state.tab, false);
 }
 addEventListener('popstate', applyViewState);
@@ -2540,12 +3327,13 @@ async function refresh() {
     initiatives = data.initiatives;
     // Projects without .tickets/ only have initiatives to show, and a project
     // with no tickets opens on its initiatives unless the URL names a view.
-    document.querySelector('#tabs').hidden = !data.has_tickets;
+    document.querySelector('#tickets-tab').hidden = !data.has_tickets;
     const first = !loaded;
     loaded = true;
-    if (activeTab !== 'initiatives' && (!data.has_tickets || (first && !tickets.length && initiatives.length && !/(^#|&)view=/.test(location.hash)))) switchTab('initiatives', false);
+    if (activeTab === 'tickets' && (!data.has_tickets || (first && !tickets.length && initiatives.length && !/(^#|&)view=/.test(location.hash)))) switchTab('initiatives', false);
     render();
     if (activeTab === 'initiatives') renderInitiatives();
+    if (activeTab === 'board') renderBoard();
     document.querySelector('#error').textContent = data.initiative_errors.length ? 'Could not read initiative maps: ' + data.initiative_errors.join('; ') : '';
   } catch (error) { document.querySelector('#error').textContent = error.message; }
 }
@@ -2736,16 +3524,121 @@ def initiatives_from(project, tickets):
             status, evidence = "Started", "Work recorded in the map."
         else:
             status, evidence = "No recorded start", "No linked tickets or map states show that work has started."
+        documents = documents_from(project, path.parent.resolve(), data.get("artifacts"))
+        version = path.stat().st_mtime_ns
         initiatives.append({
             "path": relative,
+            "slug": initiative_slug(path, info),
             "map": data,
             "status": status,
             "evidence": evidence,
             "tickets": [ticket["id"] for ticket in linked],
-            "documents": documents_from(project, path.parent.resolve(), data.get("artifacts")),
+            "documents": documents,
+            "version": str(version),
+            # Newest edit to the map or any of its documents, in milliseconds.
+            "modified": max([version] + [int(doc["version"]) for doc in documents]) // 1_000_000,
         })
     initiatives.sort(key=lambda item: (item["status"] != "No recorded start", item["map"]["initiative"]["title"].casefold()))
     return initiatives, errors
+
+
+LIFECYCLE = ("planned", "active", "paused", "completed", "cancelled")
+PHASES = ("intent", "brainstorm", "shape", "plan", "execution", "reconciliation")
+
+
+def initiative_slug(path, info):
+    slug = info.get("slug")
+    return slug if isinstance(slug, str) and slug.strip() else path.parent.name
+
+
+def initiative_dependencies(info):
+    value = info.get("depends_on")
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+
+def write_initiative(project, relative, version, changes, today):
+    """Apply status, phase, next action, or dependency changes to one map.
+    Keeps the file's indentation, stamps last_updated, and records a history
+    entry. Raises RuntimeError when the map changed since `version`."""
+    path = (project / relative).resolve()
+    if path.name != "initiative-map.json" or project not in path.parents or not path.is_file():
+        raise LookupError("Initiative map not found")
+    if str(path.stat().st_mtime_ns) != version:
+        raise RuntimeError("The initiative map changed; try again")
+    content = path.read_text(encoding="utf-8")
+    data = json.loads(content)
+    info = data["initiative"]
+    events = []
+    if "status" in changes:
+        if changes["status"] not in LIFECYCLE:
+            raise ValueError("Invalid initiative status")
+        events.append(f"Status set to {changes['status']} (was {info.get('status') or 'unset'}).")
+        info["status"] = changes["status"]
+    if "current_phase" in changes:
+        if changes["current_phase"] not in PHASES:
+            raise ValueError("Invalid initiative phase")
+        events.append(f"Phase set to {changes['current_phase']} (was {info.get('current_phase') or 'unset'}).")
+        info["current_phase"] = changes["current_phase"]
+    if "next_action" in changes:
+        text = changes["next_action"]
+        if not isinstance(text, str) or len(text) > 1000:
+            raise ValueError("Invalid next action")
+        events.append("Next action updated.")
+        info["next_action"] = text.strip()
+    if "depends_on" in changes:
+        slugs = changes["depends_on"]
+        if not isinstance(slugs, list) or not all(isinstance(item, str) for item in slugs):
+            raise ValueError("Invalid dependencies")
+        maps = {}
+        for folder, dirs, files in os.walk(project):
+            dirs[:] = [name for name in dirs if not name.startswith(".") and name not in SKIPPED_FOLDERS]
+            if "initiative-map.json" in files:
+                other = Path(folder) / "initiative-map.json"
+                try:
+                    other_info = json.loads(other.read_text(encoding="utf-8"))["initiative"]
+                    maps[initiative_slug(other, other_info)] = initiative_dependencies(other_info)
+                except (OSError, UnicodeError, ValueError, KeyError, TypeError, AttributeError):
+                    continue
+        own = initiative_slug(path, info)
+        slugs = list(dict.fromkeys(slugs))
+        if own in slugs:
+            raise ValueError("An initiative cannot depend on itself")
+        missing = [slug for slug in slugs if slug not in maps]
+        if missing:
+            raise ValueError("Unknown initiative: " + ", ".join(missing))
+        maps[own] = slugs
+        pending, seen = list(slugs), set()
+        while pending:
+            current = pending.pop()
+            if current == own:
+                raise ValueError("That dependency would create a cycle")
+            if current not in seen:
+                seen.add(current)
+                pending.extend(maps.get(current, []))
+        before = initiative_dependencies(info)
+        added, removed = [s for s in slugs if s not in before], [s for s in before if s not in slugs]
+        events.append("Dependencies changed: " + "; ".join(filter(None, [
+            added and "added " + ", ".join(added), removed and "removed " + ", ".join(removed)])) + ".")
+        info["depends_on"] = slugs
+    if not events:
+        raise ValueError("Nothing to change")
+    info["last_updated"] = today
+    if isinstance(data.get("history"), list):
+        data["history"].append({"date": today, "event": "updated-in-tk-view", "action": " ".join(events)})
+    indent = re.match(r"\{\r?\n([ \t]+)", content)
+    text = json.dumps(data, indent=indent.group(1) if indent else 2, ensure_ascii=False)
+    if content.endswith("\n"):
+        text += "\n"
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            output.write(text.encode("utf-8"))
+        os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
+        os.replace(temporary, path)
+    finally:
+        if temporary:
+            temporary.unlink(missing_ok=True)
 
 
 def write_assignee(path, expected, name):
@@ -2864,7 +3757,7 @@ def main():
             self.wfile.write(payload)
 
         def do_POST(self):
-            if self.path not in ("/api/status", "/api/assignee", "/api/dependency"):
+            if self.path not in ("/api/status", "/api/assignee", "/api/dependency", "/api/initiative"):
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
@@ -2873,11 +3766,38 @@ def main():
             if host not in allowed_hosts or (origin and origin != f"http://{host}"):
                 self.send_json(403, {"error": "Invalid request origin"})
                 return
-            if directory is None:
-                self.send_json(404, {"error": "This project has no .tickets directory"})
-                return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
                 self.send_json(415, {"error": "Expected JSON request"})
+                return
+            if self.path == "/api/initiative":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= 16384:
+                        raise ValueError()
+                    data = json.loads(self.rfile.read(length))
+                    relative, version, changes = data["path"], data["version"], data["changes"]
+                    if not isinstance(relative, str) or not isinstance(version, str) or not isinstance(changes, dict):
+                        raise ValueError()
+                except (ValueError, KeyError, TypeError):
+                    self.send_json(400, {"error": "Invalid initiative update request"})
+                    return
+                today = data.get("today") if isinstance(data.get("today"), str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", data.get("today")) else time.strftime("%Y-%m-%d")
+                with dependency_lock:
+                    try:
+                        write_initiative(project, relative, version, changes, today)
+                    except LookupError as error:
+                        self.send_json(404, {"error": str(error)})
+                        return
+                    except RuntimeError as error:
+                        self.send_json(409, {"error": str(error)})
+                        return
+                    except (OSError, UnicodeError, ValueError, KeyError, TypeError) as error:
+                        self.send_json(400, {"error": str(error)})
+                        return
+                self.send_json(200, {"path": relative})
+                return
+            if directory is None:
+                self.send_json(404, {"error": "This project has no .tickets directory"})
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))

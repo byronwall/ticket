@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../plugins/ticket-view'), 'utf8');
 const slice = (from, to) => source.slice(source.indexOf(from), source.indexOf(to));
 const context = vm.createContext({ URLSearchParams });
-vm.runInContext(slice('function normalizePath(', 'function linkElement(') + slice('function parseViewState(', 'const humanize ='), context);
+vm.runInContext(slice('function normalizePath(', 'function linkElement(') + slice('const SHOW_KEYS =', 'const humanize ='), context);
 const run = code => JSON.parse(vm.runInContext('JSON.stringify(' + code + ')', context));
 
 // Links resolve against the folder of the document that holds them, and a
@@ -27,20 +27,24 @@ assert.deepEqual(run("(() => { const used = new Map(); return ['First proof', 'F
 
 // The URL fragment restores the tab, initiative, document and list filters.
 const states = [
-  { tab: 'tickets', choice: null, doc: '', show: '', query: '' },
-  { tab: 'initiatives', choice: null, doc: '', show: 'all', query: 'chart grid' },
-  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/intent/a/shape-brief.md', show: '', query: '' },
-  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/ui-defaults.md', show: 'started', query: '' },
-  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'map', show: '', query: '' },
-  { tab: 'tickets', choice: '', doc: 'intent-brief.md', show: '', query: '' },
+  { tab: 'tickets', choice: null, doc: '', show: '', sort: '', query: '' },
+  { tab: 'initiatives', choice: null, doc: '', show: 'all', sort: 'title', query: 'chart grid' },
+  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/intent/a/shape-brief.md', show: '', sort: '', query: '' },
+  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/ui-defaults.md', show: 'active', sort: '', query: '' },
+  { tab: 'initiatives', choice: 'docs/intent/a', doc: 'map', show: 'completed', sort: 'phase', query: '' },
+  { tab: 'board', choice: null, doc: '', show: '', sort: 'status', query: 'grid' },
+  { tab: 'tickets', choice: '', doc: 'intent-brief.md', show: '', sort: '', query: '' },
 ];
 for (const state of states) {
   const hash = run('formatViewState(' + JSON.stringify(state) + ')');
   assert.deepEqual(run('parseViewState(' + JSON.stringify(hash) + ')'), state, hash);
 }
-assert.equal(run("formatViewState({ tab: 'tickets', choice: null, doc: '', show: '', query: '' })"), '');
-assert.equal(run("formatViewState({ tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/intent/a/shape-brief.md', show: '', query: '' })"), '#view=initiatives&i=docs/intent/a&d=shape-brief.md');
-assert.equal(run("formatViewState({ tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/ui-defaults.md', show: '', query: '' })"), '#view=initiatives&i=docs/intent/a&d=/docs/ui-defaults.md');
+const blank = { tab: 'tickets', choice: null, doc: '', show: '', sort: '', query: '' };
+assert.equal(run('formatViewState(' + JSON.stringify(blank) + ')'), '');
+assert.equal(run('formatViewState(' + JSON.stringify({ ...blank, tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/intent/a/shape-brief.md' }) + ')'), '#view=initiatives&i=docs/intent/a&d=shape-brief.md');
+assert.equal(run('formatViewState(' + JSON.stringify({ ...blank, tab: 'initiatives', choice: 'docs/intent/a', doc: 'docs/ui-defaults.md' }) + ')'), '#view=initiatives&i=docs/intent/a&d=/docs/ui-defaults.md');
+// Unknown filters and sorts fall back to the defaults.
+assert.deepEqual(run("parseViewState('#view=board&show=started&sort=size')"), { ...blank, tab: 'board' });
 
 // Search highlights every match, merging ranges that touch or overlap.
 assert.deepEqual(run("matchRanges('Chart grid charting', ['chart', 'art g'])"), [[0, 7], [11, 16]]);
