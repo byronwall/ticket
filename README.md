@@ -138,8 +138,8 @@ files and the Markdown documents beside them. The list on the left has a search
 box, a status menu (**Open**, each status with its count, or **All**), and a sort:
 **Recently edited** (the newest change to the map or any of its documents, the
 default), **Title**, **Status**, or **Phase**. Open hides completed and cancelled
-work. Each row shows its status, phase, how long ago it was edited, and a dot when
-it changed in the last day. Press `/` to search, and use the arrow keys to move
+work. Each row shows its status, phase, how long ago it was edited, in blue when it
+changed in the last day. Press `/` to search, and use the arrow keys to move
 through the list. Matching text in titles, summaries, and next actions is
 highlighted.
 

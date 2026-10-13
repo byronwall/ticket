@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.9.1
+# tk-plugin-version: 1.9.2
 
 """Local ticket graph with status updates. Python 3 standard library only."""
 
@@ -217,6 +217,7 @@ PAGE = r"""<!doctype html>
   .inav-item mark { border-radius: 2px; background: #ffe9a8; color: inherit; box-shadow: 0 0 0 1px #ffe9a8; }
   .inav-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; margin-top: 3px; color: var(--ink-3); font-size: 12.5px; }
   .inav-edited { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .inav-edited.fresh, .t-edited.fresh { color: var(--accent); font-weight: 600; }
   .inav-empty { padding: 16px 12px; color: var(--ink-2); }
   .inav-empty button { padding: 0; border: 0; background: none; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   #initiative-detail { --gutter: 48px; min-width: 0; overflow-y: auto; background: var(--surface); scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
@@ -270,7 +271,8 @@ PAGE = r"""<!doctype html>
   .idetail-article.enter { animation: doc-in .28s cubic-bezier(.16, 1, .3, 1); }
   @keyframes doc-in { from { opacity: .55; transform: translateY(5px); } }
   @media (prefers-reduced-motion: reduce) { .idetail-article.enter { animation: none; } }
-  .doc-file { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 16px; color: var(--ink-3); font-size: 13px; }
+  .doc-file { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: 18px; color: var(--ink-3); font-size: 13px; }
+  .doc-file .meta-run { color: var(--ink-3); }
   .doc-error { color: var(--danger); }
   .doc.markdown { max-width: none; font-size: 16.5px; line-height: 1.7; text-wrap: pretty; }
   .doc.markdown h2, .doc.markdown h3, .doc.markdown h4, .doc.markdown h5, .doc.markdown h6, .map h3 { scroll-margin-top: 68px; text-wrap: balance; }
@@ -357,7 +359,7 @@ PAGE = r"""<!doctype html>
   .life { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); font-weight: 550; white-space: nowrap; }
   .life::before, .life-dot { content: ""; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--life); border: 1.5px solid var(--life); }
   .life[data-life="planned"]::before, [data-life="planned"] > .life-dot, .life-dot[data-life="planned"], .life[data-life="paused"]::before, [data-life="paused"] > .life-dot, .life-dot[data-life="paused"] { background: none; }
-  [data-life="paused"] > .life-dot, .life-dot[data-life="paused"], .life[data-life="paused"]::before { border-style: double; border-width: 3px; width: 9px; height: 9px; }
+  [data-life="paused"] > .life-dot, .life-dot[data-life="paused"], .life[data-life="paused"]::before { border: 0; border-radius: 1px; background: linear-gradient(90deg, var(--life) 0 34%, transparent 34% 66%, var(--life) 66%); }
   .life.inferred { font-weight: 400; font-style: italic; }
   .life.inferred::before, .inferred > .life-dot, .life-dot.inferred { border-style: dashed; background: none; }
   .inav-meta .life::before { display: none; }
@@ -381,7 +383,7 @@ PAGE = r"""<!doctype html>
   .menu-count { margin-left: auto; padding-left: 16px; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
   #ticket-menu button:disabled .menu-count { color: inherit; }
   .iact-list { display: grid; gap: 3px; padding-top: 3px; min-width: 0; }
-  .iact { display: grid; grid-template-columns: 4.6rem minmax(0, max-content) auto; justify-content: start; align-items: baseline; gap: 10px; max-width: 72ch; font-size: 14px; line-height: 1.45; }
+  .iact { display: grid; grid-template-columns: 4.6rem minmax(0, max-content) auto; justify-content: start; align-items: baseline; gap: 10px; max-width: 72ch; font-size: 14.5px; line-height: 1.5; }
   .iact-date { color: var(--ink-3); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .iact-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
   .iact-event { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
@@ -439,7 +441,6 @@ PAGE = r"""<!doctype html>
   .inav-row:hover .pick-slot .life-dot, .bcard:hover .pick-slot .life-dot, .picking .pick-slot .life-dot, .picked .pick-slot .life-dot { opacity: 0; }
   .inav-row.picked .inav-item { border-color: #a9c4e6; background: var(--accent-soft); }
   .inav-row.picked .inav-item[aria-current="true"] { background: var(--surface); box-shadow: inset 3px 0 0 var(--accent), 0 1px 2px #17212c0f; }
-  .fresh-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--accent); transform: translateY(-2px); }
   .dep-badge, .drift-badge, .inferred-tag { padding: 0 7px; border-radius: 999px; font-size: 11.5px; line-height: 19px; white-space: nowrap; }
   .dep-badge { border: 1px solid var(--line-2); color: var(--ink-2); line-height: 17px; }
   .dep-badge.quiet { border-color: var(--line); color: var(--ink-3); }
@@ -456,7 +457,7 @@ PAGE = r"""<!doctype html>
   #initiative-bar:not(.picking) .pbar-hint { margin-left: auto; }
   .ibutton.quiet { border-color: transparent; background: none; color: var(--ink-2); }
   .ibutton.quiet:hover { border-color: var(--line); background: var(--sunken); color: var(--ink); }
-  .ibutton.quiet.on { border-color: #a9c4e6; background: var(--accent-soft); color: var(--accent); }
+  .ibutton.on { border-color: #a9c4e6; background: var(--accent-soft); color: var(--accent); }
   .ibutton.small { height: 28px; padding: 0 10px; font-size: 13px; }
   .idetail-actions { display: flex; flex-wrap: wrap; gap: 6px; flex: none; margin-top: 2px; }
   .meta-button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 13.5px; font-weight: 550; cursor: pointer; }
@@ -466,23 +467,25 @@ PAGE = r"""<!doctype html>
   .life-button { border-color: color-mix(in srgb, var(--life) 45%, white); background: color-mix(in srgb, var(--life) 9%, white); }
   .life-button:hover { background: color-mix(in srgb, var(--life) 16%, white); border-color: color-mix(in srgb, var(--life) 60%, white); }
   .meta-text { color: var(--ink-2); }
+  .meta-run { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 0; color: var(--ink-2); }
+  .meta-run > * + *::before { content: "·"; margin: 0 8px; color: var(--ink-3); }
   .idetail-evidence { max-width: 72ch; margin: 10px 0 0; color: var(--ink-3); font-size: 13.5px; }
   .idetail-evidence.warn { display: inline-block; padding: 6px 11px; border-radius: 7px; background: var(--warn-soft); color: #6e3c05; }
   .idetail-evidence.warn strong { color: var(--warn); font-weight: 650; }
   .inext { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); align-items: start; gap: 4px 12px; max-width: 72rem; margin-top: 12px; }
   .inext-label, .irel-label { padding-top: 4px; color: var(--ink-3); font-size: 13px; font-weight: 550; white-space: nowrap; }
-  .inext-text { justify-self: start; max-width: 72ch; padding: 3px 8px; margin-left: -8px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--ink); font-size: 15px; line-height: 1.5; text-align: left; cursor: text; }
+  .inext-text { justify-self: start; max-width: 72ch; padding: 3px 8px; margin-left: -8px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--ink); font-size: 14.5px; line-height: 1.5; text-align: left; cursor: text; }
   .inext-text:hover { border-color: var(--line); background: var(--sunken); }
   .inext-text.empty { color: var(--ink-3); font-style: italic; }
   .inext-form { display: grid; gap: 6px; max-width: 72ch; }
-  .inext-form textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--accent); border-radius: 7px; font: inherit; font-size: 15px; line-height: 1.5; color: var(--ink); resize: vertical; }
+  .inext-form textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--accent); border-radius: 7px; font: inherit; font-size: 14.5px; line-height: 1.5; color: var(--ink); resize: vertical; }
   .inext-form textarea:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 0; }
   .inext-actions { display: flex; align-items: center; gap: 6px; }
   .irelations { display: grid; gap: 6px; margin-top: 8px; }
   .irel-row { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); align-items: start; gap: 12px; }
   .irel-list { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-height: 28px; }
   .ichip { display: inline-flex; align-items: stretch; max-width: 100%; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); overflow: hidden; }
-  .ichip-open { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 10px; border: 0; background: none; color: var(--ink); font-size: 13.5px; cursor: pointer; }
+  .ichip-open { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 10px; border: 0; background: none; color: var(--ink); font-size: 14px; cursor: pointer; }
   .ichip-open:hover { background: var(--accent-soft); color: var(--accent); }
   .ichip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34ch; }
   .ichip-remove { display: inline-grid; place-items: center; padding: 0 8px 0 6px; border: 0; border-left: 1px solid var(--line); background: none; color: var(--ink-3); cursor: pointer; }
@@ -538,7 +541,6 @@ PAGE = r"""<!doctype html>
   .bcard-top { display: flex; align-items: flex-start; gap: 8px; }
   .bcard .pick-slot { margin-top: 1px; }
   .bcard-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 620; line-height: 1.32; }
-  .bcard .fresh-dot { margin-top: 6px; }
   .bcard-next { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.45; }
   .bcard-next.muted { color: var(--ink-3); }
   .bcard .inav-meta { margin-top: 1px; font-size: 12px; }
@@ -665,7 +667,7 @@ PAGE = r"""<!doctype html>
       <option value="recent">Recently edited</option><option value="title">Title</option><option value="status">Status</option><option value="phase">Phase</option>
     </select></label>
     <div id="board-bar" class="pbar" aria-live="polite"></div>
-    <span class="board-hint">Drag cards between columns to change status</span>
+    <span class="board-hint">Drag to change status · ⌘-click to select</span>
   </div>
   <div id="board-columns"></div>
 </section>
@@ -2392,7 +2394,7 @@ function renderPromptBar(host, shown, label) {
   } else if (shown.length) {
     host.append(button(`Copy prompt for ${shown.length} ${label}`, 'Copy one prompt that references every initiative listed here', element => copyText(groupPrompt(shown, label === 'shown' ? '' : label), element), 'ibutton quiet'));
     if (shown.every(item => FINISHED.has(lifecycle(item).key))) host.append(button('Retire all', 'Copy a prompt that retires every initiative listed here', element => copyText(retirePrompt(shown), element), 'ibutton quiet'));
-    host.append(make('span', 'pbar-hint', '⌘-click to select'));
+    if (host.id !== 'board-bar') host.append(make('span', 'pbar-hint', '⌘-click to select'));
   }
 }
 // History entries, newest first. Entries without a date keep file order.
@@ -2465,7 +2467,6 @@ function renderInitiativeTable(visible, current) {
     cell('t-pick', pickSlot(item));
     const name = make('div', 't-name');
     name.append(highlighted('t-title', info.title));
-    if (fresh(item)) { const dot = make('span', 'fresh-dot'); dot.title = 'Edited in the last day'; name.append(dot); }
     const titleCell = cell('t-main', name);
     if (info.summary) titleCell.append(highlighted('t-summary', info.summary));
     const statusCell = cell('t-status', lifeTag(item));
@@ -2482,7 +2483,7 @@ function renderInitiativeTable(visible, current) {
     const last = historyEntries(item)[0];
     const activity = cell('t-activity');
     if (last) activity.append(activityLine(last, 'iact compact')); else activity.textContent = '—';
-    const edited = cell('t-edited', ago(item.modified));
+    const edited = cell('t-edited' + (fresh(item) ? ' fresh' : ''), ago(item.modified));
     edited.title = 'Last file change ' + new Date(item.modified).toLocaleString();
     row.addEventListener('click', event => {
       if (event.target.closest('input')) return;
@@ -2540,7 +2541,6 @@ function renderInitiativeList() {
     if (item === current) button.setAttribute('aria-current', 'true');
     const title = make('span', 'inav-title-row');
     title.append(highlighted('inav-title', info.title));
-    if (fresh(item)) { const dot = make('span', 'fresh-dot'); dot.title = 'Edited in the last day'; title.append(dot); }
     button.append(title);
     if (info.summary) button.append(highlighted('inav-summary', info.summary));
     const meta = make('span', 'inav-meta');
@@ -2549,7 +2549,7 @@ function renderInitiativeList() {
     const waits = waitingOn(item).length;
     if (waits) { const wait = make('span', 'dep-badge', 'Waits on ' + waits); wait.title = 'Depends on unfinished initiatives'; meta.append(wait); }
     if (drift(item)) { const warn = make('span', 'drift-badge', 'Check status'); warn.title = drift(item); meta.append(warn); }
-    const edited = make('span', 'inav-edited', ago(item.modified));
+    const edited = make('span', 'inav-edited' + (fresh(item) ? ' fresh' : ''), ago(item.modified));
     edited.title = 'Last file change ' + new Date(item.modified).toLocaleString();
     meta.append(edited);
     button.append(meta);
@@ -3073,7 +3073,7 @@ function renderInitiativeDetail() {
     retire.addEventListener('click', () => copyText(retirePrompt([item]), retire));
     actions.append(retire);
   }
-  const select = make('button', 'ibutton quiet' + (picked.has(item.path) ? ' on' : ''));
+  const select = make('button', 'ibutton' + (picked.has(item.path) ? ' on' : ''));
   select.type = 'button';
   select.setAttribute('aria-pressed', String(picked.has(item.path)));
   select.title = 'Add to the selection for a combined prompt';
@@ -3103,10 +3103,12 @@ function renderInitiativeDetail() {
   phase.append(info.current_phase ? humanize(info.current_phase) + ' phase' : 'Set phase', icon('chevron'));
   phase.addEventListener('click', () => phaseMenu(item, phase));
   meta.append(status, phase);
-  if (info.scale) meta.append(make('span', 'meta-text', humanize(info.scale) + ' scale'));
-  const edited = make('span', 'meta-text', 'Edited ' + ago(item.modified));
+  const facts = make('span', 'meta-run');
+  if (info.scale) facts.append(make('span', '', humanize(info.scale) + ' scale'));
+  const edited = make('span', '', 'Edited ' + ago(item.modified));
   edited.title = 'Newest change to the map or its documents: ' + new Date(item.modified).toLocaleString() + (info.last_updated ? '\nMap last_updated: ' + info.last_updated : '');
-  meta.append(edited);
+  facts.append(edited);
+  meta.append(facts);
   head.append(meta);
 
   const evidence = make('p', 'idetail-evidence');
@@ -3240,9 +3242,11 @@ function renderInitiativeDetail() {
     path.append(make('span', 'label', listed ? listed.name : doc));
     path.addEventListener('click', () => copyText(projectPath(doc), path));
     file.append(path);
-    if (listed?.status) file.append(make('span', '', humanize(listed.status)));
-    if (listed?.updated) file.append(make('span', '', 'Updated ' + shortDate(listed.updated)));
-    if (listed?.version) file.append(make('span', '', 'Edited ' + ago(Number(listed.version) / 1e6)));
+    const facts = make('span', 'meta-run');
+    if (listed?.status) facts.append(make('span', '', humanize(listed.status)));
+    if (listed?.updated) facts.append(make('span', '', 'Updated ' + compactDate(listed.updated)));
+    if (listed?.version) facts.append(make('span', '', 'Edited ' + ago(Number(listed.version) / 1e6)));
+    if (facts.children.length) file.append(facts);
     const content = make('div', 'doc markdown');
     if (!cached) article.setAttribute('aria-busy', 'true');
     else if (cached.error) content.append(make('p', 'doc-error', 'Could not read ' + doc + '. ' + cached.error));
@@ -3380,7 +3384,6 @@ function boardCard(item) {
   if (life.inferred) card.classList.add('inferred');
   const top = make('div', 'bcard-top');
   top.append(pickSlot(item), make('span', 'bcard-title', info.title));
-  if (fresh(item)) { const dot = make('span', 'fresh-dot'); dot.title = 'Edited in the last day'; top.append(dot); }
   card.append(top);
   if (info.next_action) card.append(make('p', 'bcard-next', info.next_action));
   else if (info.summary) card.append(make('p', 'bcard-next muted', info.summary));
@@ -3392,7 +3395,7 @@ function boardCard(item) {
   const needed = neededBy(item).length;
   if (needed) { const tag = make('span', 'dep-badge quiet', 'Blocks ' + needed); tag.title = 'Needed by: ' + neededBy(item).map(other => other.map.initiative.title).join(', '); meta.append(tag); }
   if (drift(item)) { const warn = make('span', 'drift-badge', 'Check status'); warn.title = drift(item); meta.append(warn); }
-  const edited = make('span', 'inav-edited', ago(item.modified));
+  const edited = make('span', 'inav-edited' + (fresh(item) ? ' fresh' : ''), ago(item.modified));
   edited.title = 'Last file change ' + new Date(item.modified).toLocaleString();
   meta.append(edited);
   card.append(meta);
