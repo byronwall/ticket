@@ -206,7 +206,7 @@ Work evidence uses linked ticket states, then recorded milestone or execution
 states. A current plan alone does not mean work has started.
 Maps and documents refresh with tickets. Invalid maps show an error without
 hiding valid maps. The scan skips hidden folders, dependencies, build output,
-vendor files, and `tmp/`. Only Markdown files inside the project can be read.
+and vendor files. Only Markdown files inside the project can be read.
 
 ## Plugins
 

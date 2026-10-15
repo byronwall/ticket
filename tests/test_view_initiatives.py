@@ -69,7 +69,7 @@ import os
 import subprocess
 with TemporaryDirectory() as temp:
     root = Path(temp).resolve()
-    folder = root / 'docs' / 'intent' / 'solo'
+    folder = root / 'tmp' / 'solo'
     (folder / 'resources').mkdir(parents=True)
     (folder / 'initiative-map.json').write_text(json.dumps({'initiative': {'title': 'Solo'}}))
     (folder / 'intent-brief.md').write_text('Intro\n\n# Solo intent #\n')
@@ -81,7 +81,13 @@ with TemporaryDirectory() as temp:
     os.chdir(folder)
     try:
         assert viewer['find_project']() == (root, None)
+        (folder / '.tickets').mkdir()
+        assert viewer['find_project']() == (root, folder / '.tickets')
+        os.environ['TICKETS_DIR'] = str(folder / '.tickets')
+        assert viewer['find_project']() == (root, folder / '.tickets')
+        os.environ.pop('TICKETS_DIR', None)
         (root / '.tickets').mkdir()
+        os.chdir(root)
         assert viewer['find_project']() == (root, root / '.tickets')
     finally:
         os.chdir(previous)

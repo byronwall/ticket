@@ -23,7 +23,8 @@
 - CI scripts for publishing to Homebrew tap and AUR
 
 ### Plugins
-- ticket-view 1.10.1: Date initiative edits by git commit time, so a fresh checkout or worktree no longer makes every initiative look edited at checkout time; files with uncommitted changes, and untracked files, still use their modification time.
+- ticket-view 1.10.2: Date initiative edits by git commit time, so a fresh checkout or worktree no longer makes every initiative look edited at checkout time; files with uncommitted changes, and untracked files, still use their modification time.
+- ticket-view 1.10.1: Search for `initiative-map.json` files from the git repository root, including inside `tmp/` folders.
 - ticket-view 1.10.0: Restyle the board with open columns on a soft canvas, a per-column actions menu for prompts, and cards with a divided footer and no repeated status dot; make the reader's status and phase quiet inline controls and show dependencies and related initiatives as plain links instead of pills.
 - ticket-view 1.9.2: Show recent edits as an accent-colored timestamp instead of a stray dot, draw the paused status as a pause mark, separate header and document metadata with dots, use one text size across the reader's detail rows, give Select a real button, and merge the board's hints into one.
 - ticket-view 1.9.1: Fix deselecting an initiative in the table or on the board opening it instead; the faded status dot no longer covers the checkbox, and the whole selection cell toggles selection.

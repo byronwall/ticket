@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tk-plugin: Open a live dependency graph for tickets
-# tk-plugin-version: 1.10.1
+# tk-plugin-version: 1.10.2
 
 """Local ticket graph with status updates. Python 3 standard library only."""
 
@@ -3624,10 +3624,17 @@ def tickets_from(directory):
     return tickets
 
 
-SKIPPED_FOLDERS = {"node_modules", "dist", "build", "tmp", "vendor"}
+SKIPPED_FOLDERS = {"node_modules", "dist", "build", "vendor"}
 ARTIFACT_LABELS = {"intent_brief": "Intent", "brainstorm": "Brainstorm", "shape_brief": "Shape", "implementation_plan": "Plan"}
 MAX_DOCUMENTS = 80
 MAX_DOCUMENT_BYTES = 2_000_000
+
+
+def initiative_maps(project):
+    for folder, dirs, files in os.walk(project):
+        dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name not in SKIPPED_FOLDERS)
+        if "initiative-map.json" in files:
+            yield Path(folder) / "initiative-map.json"
 
 
 def document_path(project, value):
@@ -3666,7 +3673,10 @@ def documents_from(project, folder, artifacts):
         for key, value in artifacts.items():
             target = value.get("path") if isinstance(value, dict) else None
             if isinstance(target, str) and target.lower().endswith(".md"):
-                roles.setdefault((folder / target).resolve(), (key, value))
+                resolved = (folder / target).resolve()
+                if not resolved.is_file() and (project / target).resolve().is_file():
+                    resolved = (project / target).resolve()
+                roles.setdefault(resolved, (key, value))
     found = []
     for parent, dirs, files in os.walk(folder):
         dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name not in SKIPPED_FOLDERS
@@ -3768,11 +3778,7 @@ def initiatives_from(project, tickets):
     initiatives = []
     stamps = {}
     errors = []
-    for folder, dirs, files in os.walk(project):
-        dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name not in SKIPPED_FOLDERS)
-        if "initiative-map.json" not in files:
-            continue
-        path = Path(folder) / "initiative-map.json"
+    for path in initiative_maps(project):
         relative = path.relative_to(project).as_posix()
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -3906,15 +3912,12 @@ def write_initiative(project, relative, version, changes, today):
         if not isinstance(slugs, list) or not all(isinstance(item, str) for item in slugs):
             raise ValueError("Invalid dependencies")
         maps = {}
-        for folder, dirs, files in os.walk(project):
-            dirs[:] = [name for name in dirs if not name.startswith(".") and name not in SKIPPED_FOLDERS]
-            if "initiative-map.json" in files:
-                other = Path(folder) / "initiative-map.json"
-                try:
-                    other_info = json.loads(other.read_text(encoding="utf-8"))["initiative"]
-                    maps[initiative_slug(other, other_info)] = initiative_dependencies(other_info)
-                except (OSError, UnicodeError, ValueError, KeyError, TypeError, AttributeError):
-                    continue
+        for other in initiative_maps(project):
+            try:
+                other_info = json.loads(other.read_text(encoding="utf-8"))["initiative"]
+                maps[initiative_slug(other, other_info)] = initiative_dependencies(other_info)
+            except (OSError, UnicodeError, ValueError, KeyError, TypeError, AttributeError):
+                continue
         own = initiative_slug(path, info)
         slugs = list(dict.fromkeys(slugs))
         if own in slugs:
@@ -4026,25 +4029,29 @@ def would_cycle(tickets, source, target):
     return False
 
 
+def git_root(path):
+    try:
+        root = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=path, capture_output=True, text=True)
+        if root.returncode == 0 and root.stdout.strip():
+            return Path(root.stdout.strip()).resolve()
+    except OSError:
+        pass
+    return None
+
+
 def find_project():
-    """Return (project, tickets directory or None). TICKETS_DIR wins; otherwise
-    the nearest parent with .tickets/, then the git root, then the working
-    directory, so projects with only initiative documents still open."""
+    """Return (project, tickets directory or None). TICKETS_DIR wins for tickets;
+    otherwise the nearest parent with .tickets/. The project root is the git root
+    when inside a repository, or the tickets/working directory otherwise."""
     explicit = os.environ.get("TICKETS_DIR", "")
     if explicit:
         directory = Path(explicit).expanduser().resolve()
-        return (directory.parent, directory) if directory.is_dir() else (None, None)
+        return (git_root(directory.parent) or directory.parent, directory) if directory.is_dir() else (None, None)
     here = Path.cwd().resolve()
     for folder in (here, *here.parents):
         if (folder / ".tickets").is_dir():
-            return folder, folder / ".tickets"
-    try:
-        root = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=here, capture_output=True, text=True)
-        if root.returncode == 0 and root.stdout.strip():
-            return Path(root.stdout.strip()).resolve(), None
-    except OSError:
-        pass
-    return here, None
+            return git_root(folder) or folder, folder / ".tickets"
+    return git_root(here) or here, None
 
 
 def main():
